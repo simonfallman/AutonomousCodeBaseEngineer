@@ -9,7 +9,7 @@ const client = new BedrockRuntimeClient({
 });
 
 const MODEL_ID =
-  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20251115-v1:0";
+  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
 const SYSTEM_PROMPT = `You are an autonomous software engineering agent. You have access to tools that let you explore a codebase, read and write files, run tests, search semantically, and interact with Git.
 
