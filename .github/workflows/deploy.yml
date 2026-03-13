@@ -22,9 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 -d > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
       - name: Add server to known hosts
         run: ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
@@ -38,7 +40,8 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           GITHUB_TOKEN_SECRET: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ssh $USER@$HOST << EOF
+          ssh-keyscan -H $HOST >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key $USER@$HOST << EOF
             set -e
 
             if [ -d /opt/ace/.git ]; then
