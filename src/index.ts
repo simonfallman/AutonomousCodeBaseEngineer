@@ -327,7 +327,7 @@ if (USE_SSE) {
     const url = new URL(req.url ?? "/", `http://localhost`);
 
     if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/message", res);
+      const transport = new SSEServerTransport("/mcp/message", res);
       const server = createServer();
       sessions.set(transport.sessionId, { transport, server });
       res.on("close", () => {
@@ -336,7 +336,7 @@ if (USE_SSE) {
       });
       await server.connect(transport);
       startWatcher();
-    } else if (req.method === "POST" && url.pathname === "/message") {
+    } else if (req.method === "POST" && (url.pathname === "/message" || url.pathname === "/mcp/message")) {
       const sessionId = url.searchParams.get("sessionId") ?? "";
       const session = sessions.get(sessionId);
       if (!session) { res.writeHead(404).end("Session not found"); return; }
