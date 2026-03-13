@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { simpleGit } from "simple-git";
 import { setRepoPath } from "../repo.js";
 
 vi.mock("../llm/bedrock.js", () => ({
@@ -16,6 +17,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ace-intel-test-"));
+  await simpleGit(tmpDir).init();
   setRepoPath(tmpDir);
   vi.clearAllMocks();
 });

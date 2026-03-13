@@ -10,10 +10,10 @@ let tmpDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ace-git-test-"));
-  setRepoPath(tmpDir);
 
   const git = simpleGit(tmpDir);
   await git.init();
+  setRepoPath(tmpDir);
   await git.addConfig("user.email", "test@test.com");
   await git.addConfig("user.name", "Test");
 

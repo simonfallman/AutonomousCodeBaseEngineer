@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { simpleGit } from "simple-git";
 import { setRepoPath } from "../repo.js";
 import {
   listFiles,
@@ -18,6 +19,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ace-nav-test-"));
+  await simpleGit(tmpDir).init();
   setRepoPath(tmpDir);
 });
 
