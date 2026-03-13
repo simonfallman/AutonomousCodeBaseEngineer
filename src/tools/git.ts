@@ -30,8 +30,17 @@ export async function createBranch(branchName: string): Promise<string> {
   if (PROTECTED_BRANCHES.has(branchName)) {
     throw new Error(`Cannot create a branch named "${branchName}" — that's a protected branch name.`);
   }
-  // TODO: sanitize branchName by replacing spaces and special characters with hyphens
-  // so branch names like "fix my bug" become "fix-my-bug" instead of failing with a git error
+  // Sanitize branchName: replace spaces and special characters with hyphens,
+  // collapse multiple hyphens, and trim leading/trailing hyphens.
+  const sanitized = branchName
+    .trim()
+    .replace(/[\s]+/g, "-")
+    .replace(/[^a-zA-Z0-9._/-]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+  if (sanitized !== branchName) {
+    branchName = sanitized;
+  }
   await git().checkoutLocalBranch(branchName);
   return `Created and switched to branch: ${branchName}`;
 }

@@ -6,6 +6,8 @@ import { setupSchema, upsertChunks, similaritySearch } from "../vectordb/pg.js";
 import { chunkRepository, chunkLines, LANGUAGE_MAP } from "../chunker.js";
 import type { Chunk } from "../vectordb/pg.js";
 
+const MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024; // 1MB
+
 function repoName(repoPath: string): string {
   return path.basename(repoPath);
 }
@@ -20,8 +22,37 @@ export async function indexRepository(
   await setupSchema();
 
   onProgress?.("Scanning and chunking files...");
-  // TODO: skip files larger than 1MB before chunking to avoid slow embedding calls and wasted tokens
-  const chunks = await chunkRepository(repoPath, name);
+  // Skip files larger than 1MB before chunking to avoid slow embedding calls and wasted tokens.
+  const allChunks = await chunkRepository(repoPath, name);
+  const chunks = await (async () => {
+    const filtered: typeof allChunks = [];
+    const seenFiles = new Set<string>();
+    let skipped = 0;
+    for (const chunk of allChunks) {
+      if (seenFiles.has(chunk.filePath)) {
+        // Already decided to include this file
+        filtered.push(chunk);
+        continue;
+      }
+      const absPath = path.join(repoPath, chunk.filePath);
+      try {
+        const stat = await fs.stat(absPath);
+        if (stat.size > MAX_FILE_SIZE_BYTES) {
+          skipped++;
+          seenFiles.set(chunk.filePath, true as never);
+          onProgress?.(`Skipping large file (${(stat.size / 1024 / 1024).toFixed(1)}MB): ${chunk.filePath}`);
+          continue;
+        }
+      } catch {
+        // If we can't stat the file, include it anyway and let downstream handle errors
+      }
+      seenFiles.set(chunk.filePath, false as never);
+      filtered.push(chunk);
+    }
+    if (skipped > 0) onProgress?.(`Skipped ${skipped} file(s) exceeding 1MB size limit.`);
+    return filtered;
+  })();
+
   if (chunks.length === 0) return "No indexable files found.";
 
   const BATCH = 20;
@@ -60,6 +91,12 @@ export async function indexFile(absFilePath: string): Promise<void> {
   const relPath = path.relative(repoPath, absFilePath);
   const ext = path.extname(absFilePath).toLowerCase();
   const language = LANGUAGE_MAP[ext] ?? null;
+
+  // Skip files larger than 1MB
+  const stat = await fs.stat(absFilePath);
+  if (stat.size > MAX_FILE_SIZE_BYTES) {
+    return;
+  }
 
   const content = await fs.readFile(absFilePath, "utf-8");
   const rawChunks = chunkLines(content.split("\n"));

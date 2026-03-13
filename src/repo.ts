@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 
 let repoPath: string = process.env.REPO_PATH
   ? path.resolve(process.env.REPO_PATH)
@@ -9,7 +10,13 @@ export function getRepoPath(): string {
 }
 
 export function setRepoPath(newPath: string): void {
-  // TODO: validate that newPath is actually a git repository (contains a .git directory)
-  // and throw a descriptive error if not, so users get clear feedback instead of cryptic git errors later
-  repoPath = path.resolve(newPath);
+  const resolved = path.resolve(newPath);
+  const gitDir = path.join(resolved, ".git");
+  if (!fs.existsSync(gitDir)) {
+    throw new Error(
+      `"${resolved}" is not a git repository (no .git directory found). ` +
+        `Please provide a valid git repository path.`
+    );
+  }
+  repoPath = resolved;
 }
