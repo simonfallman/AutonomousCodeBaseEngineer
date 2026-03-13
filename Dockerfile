@@ -1,6 +1,8 @@
 FROM node:22-alpine
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git && \
+    git config --global user.email "ace@simonfallman.xyz" && \
+    git config --global user.name "ACE"
 
 WORKDIR /app
 
