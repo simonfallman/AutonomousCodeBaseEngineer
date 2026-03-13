@@ -20,6 +20,7 @@ export async function indexRepository(
   await setupSchema();
 
   onProgress?.("Scanning and chunking files...");
+  // TODO: skip files larger than 1MB before chunking to avoid slow embedding calls and wasted tokens
   const chunks = await chunkRepository(repoPath, name);
   if (chunks.length === 0) return "No indexable files found.";
 
