@@ -351,6 +351,7 @@ if (USE_SSE) {
 
   httpServer.listen(PORT, () => {
     console.error(`ACE MCP server listening on port ${PORT} (SSE)`);
+    indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
   });
 } else {
   const transport = new StdioServerTransport();
@@ -358,4 +359,5 @@ if (USE_SSE) {
   transport.onclose = () => stopWatcher();
   await server.connect(transport);
   startWatcher();
+  indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
 }
