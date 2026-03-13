@@ -38,7 +38,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          GITHUB_TOKEN_SECRET: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN_SECRET: ${{ secrets.GH_TOKEN }}
         run: |
           ssh-keyscan -H $HOST >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key $USER@$HOST << EOF
