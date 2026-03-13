@@ -80,7 +80,8 @@ export async function grepRepo(pattern: string, searchPath?: string): Promise<st
   let re: RegExp;
   try {
     re = new RegExp(pattern);
-  } catch {
+  } catch (err) {
+    console.error(`[grep] Invalid regex pattern "${pattern}":`, err);
     return `Invalid regex pattern: ${pattern}`;
   }
   const lines: string[] = [];
@@ -90,7 +91,8 @@ export async function grepRepo(pattern: string, searchPath?: string): Promise<st
     let content: string;
     try {
       content = await fs.readFile(absPath, "utf-8");
-    } catch {
+    } catch (err) {
+      console.error(`[grep] Failed to read file "${path.relative(repoPath, absPath)}" — skipping:`, err);
       continue;
     }
     const fileLines = content.split("\n");

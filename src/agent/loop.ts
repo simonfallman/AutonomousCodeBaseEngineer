@@ -142,6 +142,7 @@ export async function runAgentLoop(
         try {
           output = await fn(toolUse.input);
         } catch (err: unknown) {
+          console.error(`[agent] Tool "${toolUse.name}" threw an unhandled error:`, err);
           output = `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
