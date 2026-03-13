@@ -63,6 +63,7 @@ jobs:
               --name ace \
               --restart unless-stopped \
               -p 127.0.0.1:3001:3001 \
+              -v /opt/ace:/opt/ace \
               -e MCP_TRANSPORT=sse \
               -e PORT=3001 \
               -e REPO_PATH=/opt/ace \
