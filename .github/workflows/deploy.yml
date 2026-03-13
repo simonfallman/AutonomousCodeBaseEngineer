@@ -47,7 +47,7 @@ jobs:
             if [ -d /opt/ace/.git ]; then
               cd /opt/ace && git pull
             else
-              mkdir -p /opt/ace && git clone https://$GITHUB_TOKEN_SECRET@github.com/simonfallman/AutonomousCodeBaseEngineer.git /opt/ace
+              mkdir -p /opt/ace && git clone https://x-access-token:$GITHUB_TOKEN_SECRET@github.com/simonfallman/AutonomousCodeBaseEngineer.git /opt/ace
             fi
 
             cd /opt/ace
