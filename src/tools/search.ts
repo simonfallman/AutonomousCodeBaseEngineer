@@ -40,6 +40,16 @@ export async function indexRepository(
 
   for (const [filePath, fileChunks] of byFile) {
     filesDone++;
+
+    // Skip files larger than 1MB to avoid slow embedding calls
+    const absFilePath = path.join(repoPath, filePath);
+    const stats = await fs.stat(absFilePath).catch(() => null);
+    if (stats && stats.size > MAX_FILE_SIZE) {
+      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+      onProgress?.(`[${filesDone}/${totalFiles}] Skipping ${filePath} (${sizeMB}MB — too large)`);
+      continue;
+    }
+
     onProgress?.(`[${filesDone}/${totalFiles}] Embedding ${filePath}`);
 
     const embeddings: number[][] = [];
@@ -59,13 +69,15 @@ export async function indexFile(absFilePath: string): Promise<void> {
   const repoPath = getRepoPath();
   const name = repoName(repoPath);
   const relPath = path.relative(repoPath, absFilePath);
-  
-  // Check file size before processing
+
+  // Skip files larger than 1MB to avoid slow embedding calls
   const stats = await fs.stat(absFilePath);
   if (stats.size > MAX_FILE_SIZE) {
-    throw new Error(`File "${relPath}" is too large (${(stats.size / 1024 / 1024).toFixed(2)}MB). Maximum size is 1MB.`);
+    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+    console.error(`[search] Skipping "${relPath}" — file too large (${sizeMB}MB, max 1MB)`);
+    return;
   }
-  
+
   const ext = path.extname(absFilePath).toLowerCase();
   const language = LANGUAGE_MAP[ext] ?? null;
 
