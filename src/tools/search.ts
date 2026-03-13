@@ -10,6 +10,8 @@ function repoName(repoPath: string): string {
   return path.basename(repoPath);
 }
 
+const MAX_FILE_SIZE = 1024 * 1024; // 1MB in bytes
+
 export async function indexRepository(
   onProgress?: (message: string) => void
 ): Promise<string> {
@@ -20,7 +22,6 @@ export async function indexRepository(
   await setupSchema();
 
   onProgress?.("Scanning and chunking files...");
-  // TODO: skip files larger than 1MB before chunking to avoid slow embedding calls and wasted tokens
   const chunks = await chunkRepository(repoPath, name);
   if (chunks.length === 0) return "No indexable files found.";
 
@@ -39,6 +40,16 @@ export async function indexRepository(
 
   for (const [filePath, fileChunks] of byFile) {
     filesDone++;
+
+    // Skip files larger than 1MB to avoid slow embedding calls
+    const absFilePath = path.join(repoPath, filePath);
+    const stats = await fs.stat(absFilePath).catch(() => null);
+    if (stats && stats.size > MAX_FILE_SIZE) {
+      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+      onProgress?.(`[${filesDone}/${totalFiles}] Skipping ${filePath} (${sizeMB}MB — too large)`);
+      continue;
+    }
+
     onProgress?.(`[${filesDone}/${totalFiles}] Embedding ${filePath}`);
 
     const embeddings: number[][] = [];
@@ -58,6 +69,15 @@ export async function indexFile(absFilePath: string): Promise<void> {
   const repoPath = getRepoPath();
   const name = repoName(repoPath);
   const relPath = path.relative(repoPath, absFilePath);
+
+  // Skip files larger than 1MB to avoid slow embedding calls
+  const stats = await fs.stat(absFilePath);
+  if (stats.size > MAX_FILE_SIZE) {
+    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+    console.error(`[search] Skipping "${relPath}" — file too large (${sizeMB}MB, max 1MB)`);
+    return;
+  }
+
   const ext = path.extname(absFilePath).toLowerCase();
   const language = LANGUAGE_MAP[ext] ?? null;
 

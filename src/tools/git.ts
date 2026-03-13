@@ -26,14 +26,40 @@ async function getRemoteOwnerRepo(): Promise<{ owner: string; repo: string }> {
   return { owner: match[1], repo: match[2] };
 }
 
+function sanitizeBranchName(branchName: string): string {
+  // Replace spaces with hyphens
+  let sanitized = branchName.replace(/\s+/g, '-');
+  
+  // Replace special characters that are invalid in git branch names
+  // Valid characters are: alphanumeric, hyphen, underscore, forward slash, and dot (not at start)
+  sanitized = sanitized.replace(/[^a-zA-Z0-9\-_\/\.]/g, '-');
+  
+  // Remove leading/trailing hyphens and dots
+  sanitized = sanitized.replace(/^[\-\.]+|[\-\.]+$/g, '');
+  
+  // Replace multiple consecutive hyphens with a single hyphen
+  sanitized = sanitized.replace(/-+/g, '-');
+  
+  // Ensure the branch name is not empty
+  if (!sanitized) {
+    throw new Error('Branch name cannot be empty after sanitization');
+  }
+  
+  return sanitized;
+}
+
 export async function createBranch(branchName: string): Promise<string> {
   if (PROTECTED_BRANCHES.has(branchName)) {
     throw new Error(`Cannot create a branch named "${branchName}" — that's a protected branch name.`);
   }
-  // TODO: sanitize branchName by replacing spaces and special characters with hyphens
-  // so branch names like "fix my bug" become "fix-my-bug" instead of failing with a git error
-  await git().checkoutLocalBranch(branchName);
-  return `Created and switched to branch: ${branchName}`;
+  
+  const sanitized = sanitizeBranchName(branchName);
+  await git().checkoutLocalBranch(sanitized);
+  
+  if (sanitized !== branchName) {
+    return `Created and switched to branch: ${sanitized} (sanitized from "${branchName}")`;
+  }
+  return `Created and switched to branch: ${sanitized}`;
 }
 
 export async function getCurrentBranch(): Promise<string> {

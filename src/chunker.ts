@@ -4,6 +4,7 @@ import type { Chunk } from "./vectordb/pg.js";
 
 const CHUNK_SIZE = 300; // lines
 const CHUNK_OVERLAP = 30;
+const MAX_FILE_SIZE = 1024 * 1024; // 1MB in bytes
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", "__pycache__",
@@ -77,6 +78,14 @@ export async function chunkRepository(repoPath: string, repoName: string): Promi
 
   for (const filePath of files) {
     try {
+      // Check file size before reading
+      const stats = await fs.stat(filePath);
+      if (stats.size > MAX_FILE_SIZE) {
+        const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+        console.error(`[chunker] Skipping "${filePath}" — file is too large (${sizeMB}MB, max 1MB)`);
+        continue;
+      }
+      
       const content = await fs.readFile(filePath, "utf-8");
       const lines = content.split("\n");
       const ext = path.extname(filePath).toLowerCase();
