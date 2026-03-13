@@ -45,7 +45,9 @@ jobs:
             set -e
 
             if [ -d /opt/ace/.git ]; then
-              cd /opt/ace && git pull
+              cd /opt/ace
+              git remote set-url origin https://x-access-token:$GITHUB_TOKEN_SECRET@github.com/simonfallman/AutonomousCodeBaseEngineer.git
+              git pull
             else
               mkdir -p /opt/ace && git clone https://x-access-token:$GITHUB_TOKEN_SECRET@github.com/simonfallman/AutonomousCodeBaseEngineer.git /opt/ace
             fi
