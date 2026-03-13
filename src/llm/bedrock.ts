@@ -10,7 +10,7 @@ const client = new BedrockRuntimeClient({
 // Default to Claude Sonnet 4 on Bedrock.
 // Override with BEDROCK_LLM_MODEL_ID env var.
 const MODEL_ID =
-  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20251115-v1:0";
+  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
 export async function complete(systemPrompt: string, userMessage: string): Promise<string> {
   const body = JSON.stringify({
