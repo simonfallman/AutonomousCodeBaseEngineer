@@ -93,8 +93,8 @@ export async function chunkRepository(repoPath: string, repoName: string): Promi
           content: chunk.text,
         });
       }
-    } catch {
-      // skip unreadable files (binary, permission errors, etc.)
+    } catch (err) {
+      console.error(`[chunker] Failed to read file "${filePath}" — skipping (binary or permission error):`, err);
     }
   }
 

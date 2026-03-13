@@ -35,7 +35,8 @@ async function searchInFile(
   let content: string;
   try {
     content = await fs.readFile(absPath, "utf-8");
-  } catch {
+  } catch (err) {
+    console.error(`[find_function_usage] Failed to read file "${relPath}" — skipping:`, err);
     return [];
   }
 
@@ -159,8 +160,11 @@ export async function analyzeDependencies(): Promise<string> {
     try {
       const content = await fs.readFile(path.join(repoPath, filename), "utf-8");
       results.push(`## ${label}\n${parse(content)}`);
-    } catch {
-      // file doesn't exist in this repo — skip
+    } catch (err: any) {
+      // Only log unexpected errors; ENOENT just means this dep file isn't present
+      if (err?.code !== "ENOENT") {
+        console.error(`[analyze_dependencies] Unexpected error reading "${filename}":`, err);
+      }
     }
   }
 

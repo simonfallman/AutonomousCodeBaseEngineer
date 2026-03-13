@@ -16,7 +16,11 @@ async function readAceConfig(repoPath: string): Promise<AceConfig> {
   try {
     const raw = await fs.readFile(path.join(repoPath, ".ace.json"), "utf-8");
     return JSON.parse(raw);
-  } catch {
+  } catch (err: any) {
+    // ENOENT just means no config file — that's fine and expected
+    if (err?.code !== "ENOENT") {
+      console.error("[ace config] Failed to parse .ace.json — using defaults:", err);
+    }
     return {};
   }
 }
@@ -31,27 +35,37 @@ async function detectTestCommand(repoPath: string): Promise<string> {
     if (pkg.scripts?.test && !pkg.scripts.test.includes("no test specified")) {
       return "npm test";
     }
-  } catch {}
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") {
+      console.error("[detectTestCommand] Failed to read or parse package.json:", err);
+    }
+  }
 
   // Python
   for (const f of ["pytest.ini", "pyproject.toml", "setup.py"]) {
     try {
       await fs.access(path.join(repoPath, f));
       return "pytest";
-    } catch {}
+    } catch {
+      // file not present — try next candidate
+    }
   }
 
   // Rust
   try {
     await fs.access(path.join(repoPath, "Cargo.toml"));
     return "cargo test";
-  } catch {}
+  } catch {
+    // file not present — try next candidate
+  }
 
   // Go
   try {
     await fs.access(path.join(repoPath, "go.mod"));
     return "go test ./...";
-  } catch {}
+  } catch {
+    // file not present — no runner detected
+  }
 
   throw new Error(
     "Could not detect a test runner. Add a .ace.json with { \"test\": \"<command>\" } to the repo root."
