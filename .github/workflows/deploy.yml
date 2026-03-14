@@ -51,6 +51,7 @@ jobs:
               git fetch origin main
               git checkout main
               git reset --hard origin/main
+              git clean -fd
             else
               mkdir -p /opt/ace && git clone https://x-access-token:$GITHUB_TOKEN_SECRET@github.com/simonfallman/AutonomousCodeBaseEngineer.git /opt/ace
             fi
