@@ -133,3 +133,9 @@ export async function deleteFileChunks(repo: string, filePath: string): Promise<
   const db = getPool();
   await db.query("DELETE FROM code_chunks WHERE repo = $1 AND file_path = $2", [repo, filePath]);
 }
+
+/** Lightweight connectivity probe — throws if the database is unreachable. */
+export async function checkConnection(): Promise<void> {
+  const db = getPool();
+  await db.query("SELECT 1");
+}

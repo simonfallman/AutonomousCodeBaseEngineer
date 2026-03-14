@@ -398,7 +398,17 @@ if (USE_SSE) {
       const transport = new SSEServerTransport("/mcp/message", res);
       const server = createServer();
       sessions.set(transport.sessionId, { transport, server });
+
+      // Send SSE keepalive comments every 25s to prevent nginx/proxy idle timeout (default 60s).
+      // SSE comments (lines starting with ':') are ignored by clients but keep the TCP connection alive.
+      const keepaliveInterval = setInterval(() => {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(":keepalive\n\n");
+        }
+      }, 25_000);
+
       res.on("close", () => {
+        clearInterval(keepaliveInterval);
         sessions.delete(transport.sessionId);
         if (sessions.size === 0) stopWatcher();
       });
