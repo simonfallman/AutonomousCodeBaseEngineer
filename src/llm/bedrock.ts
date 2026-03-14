@@ -1,19 +1,5 @@
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from "@aws-sdk/client-bedrock-runtime";
-
-const REQUEST_TIMEOUT_MS = 120_000; // 2 min per request
-
-const client = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION ?? "us-east-1",
-  requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS },
-});
-
-// Default to Claude Sonnet 4 on Bedrock.
-// Override with BEDROCK_LLM_MODEL_ID env var.
-const MODEL_ID =
-  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import { bedrockClient, LLM_MODEL_ID } from "./client.js";
 
 export async function complete(systemPrompt: string, userMessage: string): Promise<string> {
   const body = JSON.stringify({
@@ -24,7 +10,7 @@ export async function complete(systemPrompt: string, userMessage: string): Promi
   });
 
   const command = new InvokeModelCommand({
-    modelId: MODEL_ID,
+    modelId: LLM_MODEL_ID,
     contentType: "application/json",
     accept: "application/json",
     body,
@@ -35,7 +21,7 @@ export async function complete(systemPrompt: string, userMessage: string): Promi
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await client.send(command);
+      const response = await bedrockClient.send(command);
       const result = JSON.parse(Buffer.from(response.body).toString("utf-8"));
       return result.content[0].text as string;
     } catch (err: unknown) {

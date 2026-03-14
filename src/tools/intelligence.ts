@@ -3,11 +3,7 @@ import path from "path";
 import { getRepoPath } from "../repo.js";
 import { complete } from "../llm/bedrock.js";
 import { readFile } from "./navigation.js";
-
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
-  ".venv", "venv", "target", "vendor",
-]);
+import { SKIP_DIRS } from "../constants.js";
 
 // --- summarize_file ---
 
@@ -67,7 +63,6 @@ async function walkRepo(dir: string): Promise<string[]> {
   const results: string[] = [];
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {

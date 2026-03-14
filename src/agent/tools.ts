@@ -1,7 +1,7 @@
 import { listFiles, readFile, writeFile, deleteFile, searchFiles, grepRepo, applyPatch } from "../tools/navigation.js";
 import { runTests, runLinter, runBuild } from "../tools/testing.js";
-import { semanticSearch } from "../tools/search.js";
-import { createBranch, commitChanges, pushBranch, openPullRequest } from "../tools/git.js";
+import { indexRepository, semanticSearch } from "../tools/search.js";
+import { getCurrentBranch, createBranch, commitChanges, pushBranch, openPullRequest } from "../tools/git.js";
 import { summarizeFile, findFunctionUsage, analyzeDependencies } from "../tools/intelligence.js";
 
 export type ToolFn = (input: Record<string, unknown>) => Promise<string>;
@@ -18,6 +18,8 @@ export const TOOL_REGISTRY: Record<string, ToolFn> = {
   run_linter: () => runLinter(),
   run_build: () => runBuild(),
   semantic_search: ({ query, limit }) => semanticSearch(query as string, (limit as number) ?? 5),
+  index_repository: () => indexRepository(),
+  get_current_branch: () => getCurrentBranch(),
   create_branch: ({ name }) => createBranch(name as string),
   commit_changes: ({ message }) => commitChanges(message as string),
   push_branch: () => pushBranch(),
@@ -124,6 +126,16 @@ export const TOOL_SCHEMAS = [
       },
       required: ["query"],
     },
+  },
+  {
+    name: "index_repository",
+    description: "Chunk and embed the repo into the vector database for semantic search",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "get_current_branch",
+    description: "Get the current git branch name",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "create_branch",

@@ -1,20 +1,9 @@
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from "@aws-sdk/client-bedrock-runtime";
+import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import { bedrockClient, LLM_MODEL_ID, REQUEST_TIMEOUT_MS } from "../llm/client.js";
 import { TOOL_REGISTRY, TOOL_SCHEMAS } from "./tools.js";
 
-const REQUEST_TIMEOUT_MS = 120_000; // 2 min per Bedrock call
 const TOOL_OUTPUT_MAX_CHARS = 30_000; // truncate tool outputs to prevent context bloat
 const TOOL_TIMEOUT_MS = 300_000; // 5 min max per tool call
-
-const client = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION ?? "us-east-1",
-  requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS },
-});
-
-const MODEL_ID =
-  process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
 const SYSTEM_PROMPT = `You are an autonomous software engineering agent. You have access to tools that let you explore a codebase, read and write files, run tests, search semantically, and interact with Git.
 
@@ -80,14 +69,14 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   });
 
   const command = new InvokeModelCommand({
-    modelId: MODEL_ID,
+    modelId: LLM_MODEL_ID,
     contentType: "application/json",
     accept: "application/json",
     body,
   });
 
   const response = await withTimeout(
-    client.send(command),
+    bedrockClient.send(command),
     REQUEST_TIMEOUT_MS,
     "Bedrock LLM call"
   );
@@ -212,7 +201,7 @@ export async function runAgentLoop(
 export async function planTask(task: string): Promise<string> {
   const body = JSON.stringify({
     anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 1024,
+    max_tokens: 4096,
     system:
       "You are a senior software engineer. Given a task description and a list of available tools, produce a concise numbered step-by-step plan to complete the task. Do not execute anything — only plan.",
     messages: [
@@ -224,14 +213,14 @@ export async function planTask(task: string): Promise<string> {
   });
 
   const command = new InvokeModelCommand({
-    modelId: MODEL_ID,
+    modelId: LLM_MODEL_ID,
     contentType: "application/json",
     accept: "application/json",
     body,
   });
 
   const response = await withTimeout(
-    client.send(command),
+    bedrockClient.send(command),
     REQUEST_TIMEOUT_MS,
     "Bedrock planTask call"
   );

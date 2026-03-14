@@ -7,6 +7,9 @@ let pool: pg.Pool | null = null;
 
 function getPool(): pg.Pool {
   if (!pool) {
+    if (!process.env.DATABASE_URL) {
+      throw new Error("DATABASE_URL env var is required for vector database operations.");
+    }
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       max: 10,
@@ -36,8 +39,7 @@ export async function setupSchema(): Promise<void> {
   await db.query(`
     CREATE INDEX IF NOT EXISTS code_chunks_embedding_idx
     ON code_chunks
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100)
+    USING hnsw (embedding vector_cosine_ops)
   `);
 }
 
@@ -56,29 +58,40 @@ export async function upsertChunks(chunks: Chunk[], embeddings: number[][]): Pro
   const db = getPool();
   if (chunks.length === 0) return;
 
-  const { repo, filePath } = chunks[0];
-  await db.query("DELETE FROM code_chunks WHERE repo = $1 AND file_path = $2", [repo, filePath]);
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
 
-  // Batch insert instead of individual inserts
-  for (let i = 0; i < chunks.length; i += INSERT_BATCH_SIZE) {
-    const batch = chunks.slice(i, i + INSERT_BATCH_SIZE);
-    const batchEmbeddings = embeddings.slice(i, i + INSERT_BATCH_SIZE);
+    const { repo, filePath } = chunks[0];
+    await client.query("DELETE FROM code_chunks WHERE repo = $1 AND file_path = $2", [repo, filePath]);
 
-    const values: unknown[] = [];
-    const placeholders: string[] = [];
+    for (let i = 0; i < chunks.length; i += INSERT_BATCH_SIZE) {
+      const batch = chunks.slice(i, i + INSERT_BATCH_SIZE);
+      const batchEmbeddings = embeddings.slice(i, i + INSERT_BATCH_SIZE);
 
-    for (let j = 0; j < batch.length; j++) {
-      const c = batch[j];
-      const offset = j * 7;
-      placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7})`);
-      values.push(c.repo, c.filePath, c.startLine, c.endLine, c.language, c.content, pgvector.toSql(batchEmbeddings[j]));
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+
+      for (let j = 0; j < batch.length; j++) {
+        const c = batch[j];
+        const offset = j * 7;
+        placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7})`);
+        values.push(c.repo, c.filePath, c.startLine, c.endLine, c.language, c.content, pgvector.toSql(batchEmbeddings[j]));
+      }
+
+      await client.query(
+        `INSERT INTO code_chunks (repo, file_path, start_line, end_line, language, content, embedding)
+         VALUES ${placeholders.join(", ")}`,
+        values
+      );
     }
 
-    await db.query(
-      `INSERT INTO code_chunks (repo, file_path, start_line, end_line, language, content, embedding)
-       VALUES ${placeholders.join(", ")}`,
-      values
-    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
 }
 

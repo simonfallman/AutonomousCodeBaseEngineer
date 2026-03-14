@@ -1,6 +1,7 @@
 import { simpleGit } from "simple-git";
 import { Octokit } from "@octokit/rest";
 import { getRepoPath } from "../repo.js";
+import { SENSITIVE_PATTERNS } from "../constants.js";
 
 const PROTECTED_BRANCHES = new Set(["main", "master", "production", "prod"]);
 
@@ -75,13 +76,31 @@ export async function commitChanges(message: string): Promise<string> {
     return "Nothing to commit — working tree is clean.";
   }
 
-  // Stage all changes
-  await g.add(".");
+  // Filter out sensitive files before staging
+  const safeFiles: string[] = [];
+  const blockedFiles: string[] = [];
+  for (const f of status.files) {
+    if (SENSITIVE_PATTERNS.some((re) => re.test(f.path))) {
+      blockedFiles.push(f.path);
+    } else {
+      safeFiles.push(f.path);
+    }
+  }
+
+  if (safeFiles.length === 0) {
+    return `Refused to commit — all ${blockedFiles.length} changed file(s) match sensitive patterns: ${blockedFiles.join(", ")}`;
+  }
+
+  await g.add(safeFiles);
   await g.commit(message);
 
   const log = await g.log({ maxCount: 1 });
   const sha = log.latest?.hash?.slice(0, 7) ?? "unknown";
-  return `Committed ${status.files.length} file(s) as ${sha}: ${message}`;
+  let result = `Committed ${safeFiles.length} file(s) as ${sha}: ${message}`;
+  if (blockedFiles.length > 0) {
+    result += `\n⚠ Skipped sensitive files: ${blockedFiles.join(", ")}`;
+  }
+  return result;
 }
 
 export async function pushBranch(): Promise<string> {

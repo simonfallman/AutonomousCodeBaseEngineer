@@ -5,18 +5,13 @@ import { embed } from "../embeddings/bedrock.js";
 import { setupSchema, upsertChunks, similaritySearch } from "../vectordb/pg.js";
 import { chunkRepository, chunkLines, LANGUAGE_MAP } from "../chunker.js";
 import type { Chunk } from "../vectordb/pg.js";
-
-function repoName(repoPath: string): string {
-  return path.basename(repoPath);
-}
-
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB in bytes
+import { repoId, MAX_FILE_SIZE } from "../constants.js";
 
 export async function indexRepository(
   onProgress?: (message: string) => void
 ): Promise<string> {
   const repoPath = getRepoPath();
-  const name = repoName(repoPath);
+  const name = repoId(repoPath);
 
   onProgress?.("Setting up schema...");
   await setupSchema();
@@ -67,7 +62,7 @@ export async function indexRepository(
 
 export async function indexFile(absFilePath: string): Promise<void> {
   const repoPath = getRepoPath();
-  const name = repoName(repoPath);
+  const name = repoId(repoPath);
   const relPath = path.relative(repoPath, absFilePath);
 
   // Skip files larger than 1MB to avoid slow embedding calls
@@ -104,7 +99,7 @@ export async function indexFile(absFilePath: string): Promise<void> {
 
 export async function semanticSearch(query: string, limit = 5): Promise<string> {
   const repoPath = getRepoPath();
-  const name = repoName(repoPath);
+  const name = repoId(repoPath);
 
   const queryEmbedding = await embed(query);
   const results = await similaritySearch(name, queryEmbedding, limit);

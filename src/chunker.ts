@@ -1,15 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
 import type { Chunk } from "./vectordb/pg.js";
+import { SKIP_DIRS, SKIP_EXTENSIONS, MAX_FILE_SIZE } from "./constants.js";
 
 const CHUNK_SIZE = 300; // lines
 const CHUNK_OVERLAP = 30;
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB in bytes
-
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
-  ".venv", "venv", "target", "vendor",
-]);
 
 export const LANGUAGE_MAP: Record<string, string> = {
   ".ts": "typescript", ".tsx": "typescript",
@@ -33,13 +28,6 @@ export const LANGUAGE_MAP: Record<string, string> = {
   ".sh": "shell", ".bash": "shell",
 };
 
-const SKIP_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
-  ".woff", ".woff2", ".ttf", ".eot",
-  ".zip", ".tar", ".gz",
-  ".lock", ".sum",
-  ".map",
-]);
 
 async function collectFiles(dir: string): Promise<string[]> {
   const results: string[] = [];

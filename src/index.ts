@@ -9,7 +9,7 @@ import { runTests, runLinter, runBuild } from "./tools/testing.js";
 import { indexRepository, semanticSearch } from "./tools/search.js";
 import { createBranch, getCurrentBranch, commitChanges, pushBranch, openPullRequest } from "./tools/git.js";
 import { summarizeFile, findFunctionUsage, analyzeDependencies } from "./tools/intelligence.js";
-import { planTask, runAgentLoop } from "./agent/loop.js";
+import { planTask, runAgentLoop, type AgentStep, type AgentUsage } from "./agent/loop.js";
 import { getRepoPath, setRepoPath } from "./repo.js";
 import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
 
@@ -27,6 +27,17 @@ function createServer(): McpServer {
       method: "notifications/progress",
       params: { progressToken: token, progress, total, ...(message ? { message } : {}) },
     }).catch(() => { /* ignore notification failures */ });
+  }
+
+  // Helper: start a heartbeat that sends progress notifications every 15s to prevent MCP client timeout (default 60s).
+  // Returns a stop function.
+  function startHeartbeat(extra: Parameters<typeof sendProgress>[0], label: string): () => void {
+    let tick = 0;
+    const interval = setInterval(() => {
+      tick++;
+      sendProgress(extra, tick, tick + 1, `[heartbeat] ${label} still running…`);
+    }, 15_000);
+    return () => clearInterval(interval);
   }
 
   // --- Repo management ---
@@ -172,12 +183,17 @@ function createServer(): McpServer {
     {},
     async (_args, extra) => {
       let step = 0;
-      const result = await indexRepository((msg) => {
-        step++;
-        server.sendLoggingMessage({ level: "info", data: msg });
-        sendProgress(extra, step, step + 1, msg);
-      });
-      return { content: [{ type: "text", text: result }] };
+      const stopHeartbeat = startHeartbeat(extra, "index_repository");
+      try {
+        const result = await indexRepository((msg) => {
+          step++;
+          server.sendLoggingMessage({ level: "info", data: msg });
+          sendProgress(extra, step, step + 1, msg);
+        });
+        return { content: [{ type: "text", text: result }] };
+      } finally {
+        stopHeartbeat();
+      }
     }
   );
 
@@ -256,9 +272,14 @@ function createServer(): McpServer {
     "summarize_file",
     "Ask Claude to summarize a file's purpose, exports, and key patterns",
     { path: z.string().describe("File path relative to repo root") },
-    async ({ path }) => {
-      const result = await summarizeFile(path);
-      return { content: [{ type: "text", text: result }] };
+    async ({ path }, extra) => {
+      const stopHeartbeat = startHeartbeat(extra, "summarize_file");
+      try {
+        const result = await summarizeFile(path);
+        return { content: [{ type: "text", text: result }] };
+      } finally {
+        stopHeartbeat();
+      }
     }
   );
 
@@ -288,9 +309,14 @@ function createServer(): McpServer {
     "plan_task",
     "Ask Claude to produce a step-by-step plan for a task without executing anything",
     { task: z.string().describe("Natural language task description") },
-    async ({ task }) => {
-      const result = await planTask(task);
-      return { content: [{ type: "text", text: result }] };
+    async ({ task }, extra) => {
+      const stopHeartbeat = startHeartbeat(extra, "plan_task");
+      try {
+        const result = await planTask(task);
+        return { content: [{ type: "text", text: result }] };
+      } finally {
+        stopHeartbeat();
+      }
     }
   );
 
@@ -310,13 +336,20 @@ function createServer(): McpServer {
     async ({ task, max_iterations }, extra) => {
       let step = 0;
       const totalEstimate = max_iterations * 2; // rough estimate for progress bar
+      const stopHeartbeat = startHeartbeat(extra, "solve_task");
 
-      const { steps, answer, usage } = await runAgentLoop(task, max_iterations, (msg) => {
-        step++;
-        server.sendLoggingMessage({ level: "info", data: msg });
-        // Send progress notification to keep the MCP connection alive
-        sendProgress(extra, step, totalEstimate, msg);
-      });
+      let result: { steps: AgentStep[]; answer: string; usage: AgentUsage };
+      try {
+        result = await runAgentLoop(task, max_iterations, (msg) => {
+          step++;
+          server.sendLoggingMessage({ level: "info", data: msg });
+          sendProgress(extra, step, totalEstimate, msg);
+        });
+      } finally {
+        stopHeartbeat();
+      }
+
+      const { steps, answer, usage } = result;
 
       const log = steps
         .map((s) => {
@@ -340,12 +373,28 @@ const USE_SSE = process.env.MCP_TRANSPORT === "sse";
 
 if (USE_SSE) {
   const PORT = parseInt(process.env.PORT ?? "3001");
+  const HOST = process.env.HOST ?? "127.0.0.1"; // bind to localhost by default for security
+  const API_KEY = process.env.MCP_API_KEY; // optional API key for SSE auth
+  const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS ?? "10");
   const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
 
   const httpServer = http.createServer(async (req, res) => {
+    // API key check (if configured)
+    if (API_KEY) {
+      const authHeader = req.headers.authorization;
+      if (authHeader !== `Bearer ${API_KEY}`) {
+        res.writeHead(401).end("Unauthorized");
+        return;
+      }
+    }
+
     const url = new URL(req.url ?? "/", `http://localhost`);
 
     if (req.method === "GET" && url.pathname === "/sse") {
+      if (sessions.size >= MAX_SESSIONS) {
+        res.writeHead(503).end("Too many sessions");
+        return;
+      }
       const transport = new SSEServerTransport("/mcp/message", res);
       const server = createServer();
       sessions.set(transport.sessionId, { transport, server });
@@ -368,8 +417,9 @@ if (USE_SSE) {
     }
   });
 
-  httpServer.listen(PORT, () => {
-    console.error(`ACE MCP server listening on port ${PORT} (SSE)`);
+  httpServer.listen(PORT, HOST, () => {
+    console.error(`ACE MCP server listening on ${HOST}:${PORT} (SSE)`);
+    if (API_KEY) console.error("[auth] API key authentication enabled");
     indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
   });
 } else {

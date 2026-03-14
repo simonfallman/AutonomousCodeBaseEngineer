@@ -3,17 +3,9 @@ import path from "path";
 import { getRepoPath } from "./repo.js";
 import { indexFile } from "./tools/search.js";
 import { deleteFileChunks } from "./vectordb/pg.js";
-
-const SKIP_DIRS = [
-  "node_modules", ".git", "dist", "build", ".next",
-  "__pycache__", ".venv", "venv", "target", "vendor",
-];
+import { SKIP_DIRS, repoId } from "./constants.js";
 
 let watcher: FSWatcher | null = null;
-
-function repoName(repoPath: string): string {
-  return path.basename(repoPath);
-}
 
 export async function restartWatcher(): Promise<void> {
   await stopWatcher();
@@ -27,7 +19,7 @@ export function startWatcher(): void {
   watcher = chokidar.watch(repoPath, {
     ignored: [
       /(^|[/\\])\../,
-      ...SKIP_DIRS.map((d) => path.join(repoPath, d)),
+      ...[...SKIP_DIRS].map((d) => path.join(repoPath, d)),
     ],
     persistent: true,
     ignoreInitial: true,
@@ -42,7 +34,7 @@ export function startWatcher(): void {
 
   const handleUnlink = (filePath: string) => {
     const relPath = path.relative(repoPath, filePath);
-    deleteFileChunks(repoName(repoPath), relPath).catch((err) =>
+    deleteFileChunks(repoId(repoPath), relPath).catch((err) =>
       console.error(`[watcher] Failed to delete chunks for ${filePath}:`, err)
     );
   };

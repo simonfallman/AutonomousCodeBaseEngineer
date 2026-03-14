@@ -4,11 +4,7 @@ import path from "path";
 import { glob } from "glob";
 import { applyPatch as diffApplyPatch } from "diff";
 import { getRepoPath } from "../repo.js";
-
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
-  ".venv", "venv", "target", "vendor",
-]);
+import { SKIP_DIRS } from "../constants.js";
 
 const MAX_GREP_MATCHES = 200;
 const MAX_READ_SIZE = 2 * 1024 * 1024; // 2MB max file read
@@ -68,6 +64,11 @@ export async function deleteFile(filePath: string): Promise<string> {
 }
 
 export async function searchFiles(pattern: string): Promise<string> {
+  // Block absolute patterns and path traversal that could escape the repo
+  if (path.isAbsolute(pattern) || pattern.includes("..")) {
+    throw new Error("Glob pattern must be relative and cannot contain '..'");
+  }
+
   const repoPath = getRepoPath();
   const matches = await glob(pattern, {
     cwd: repoPath,
@@ -82,7 +83,6 @@ async function walkFiles(dir: string): Promise<string[]> {
   const results: string[] = [];
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
