@@ -68,6 +68,7 @@ jobs:
               -p 127.0.0.1:3001:3001 \
               -v /opt/ace:/opt/ace \
               -e MCP_TRANSPORT=sse \
+              -e HOST=0.0.0.0 \
               -e PORT=3001 \
               -e REPO_PATH=/opt/ace \
               -e AWS_REGION=us-east-1 \
