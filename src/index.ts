@@ -379,6 +379,17 @@ if (USE_SSE) {
   const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
 
   const httpServer = http.createServer(async (req, res) => {
+    // CORS headers for mcp-remote and browser-based clients
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+    // Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
+
     // API key check (if configured)
     if (API_KEY) {
       const authHeader = req.headers.authorization;
@@ -390,12 +401,18 @@ if (USE_SSE) {
 
     const url = new URL(req.url ?? "/", `http://localhost`);
 
-    if (req.method === "GET" && url.pathname === "/sse") {
+    // Normalize paths: accept both /sse and /mcp/sse (nginx may or may not strip prefix)
+    const pathname = url.pathname;
+
+    if (req.method === "GET" && (pathname === "/sse" || pathname === "/mcp/sse")) {
       if (sessions.size >= MAX_SESSIONS) {
         res.writeHead(503).end("Too many sessions");
         return;
       }
-      const transport = new SSEServerTransport("/mcp/message", res);
+      // Determine the message endpoint path based on how the client reached the SSE endpoint.
+      // If client connected via /mcp/sse, messages should go to /mcp/message; otherwise /message.
+      const messageEndpoint = pathname.startsWith("/mcp") ? "/mcp/message" : "/message";
+      const transport = new SSEServerTransport(messageEndpoint, res);
       const server = createServer();
       sessions.set(transport.sessionId, { transport, server });
 
@@ -414,12 +431,12 @@ if (USE_SSE) {
       });
       await server.connect(transport);
       startWatcher();
-    } else if (req.method === "POST" && (url.pathname === "/message" || url.pathname === "/mcp/message")) {
+    } else if (req.method === "POST" && (pathname === "/message" || pathname === "/mcp/message")) {
       const sessionId = url.searchParams.get("sessionId") ?? "";
       const session = sessions.get(sessionId);
       if (!session) { res.writeHead(404).end("Session not found"); return; }
       await session.transport.handlePostMessage(req, res);
-    } else if (req.method === "GET" && url.pathname === "/health") {
+    } else if (req.method === "GET" && (pathname === "/health" || pathname === "/mcp/health")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", sessions: sessions.size }));
     } else {

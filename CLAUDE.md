@@ -25,7 +25,7 @@ Copy `.env.example` to `.env` and fill in credentials before running.
 
 - **Runtime:** Node.js + TypeScript (`"type": "module"`, Node16 module resolution)
 - **MCP SDK:** `@modelcontextprotocol/sdk` — stdio transport
-- **LLM:** Amazon Bedrock — Claude Sonnet 4 (`us.anthropic.claude-sonnet-4-5-20251115-v1:0`), overridable via `BEDROCK_LLM_MODEL_ID`
+- **LLM:** Amazon Bedrock — Claude Sonnet 4 (`us.anthropic.claude-sonnet-4-20250514-v1:0`), overridable via `BEDROCK_LLM_MODEL_ID`
 - **Embeddings:** Amazon Titan Text Embeddings V2 (1024-dim) via Bedrock
 - **Vector DB:** PostgreSQL + pgvector
 - **Git:** `simple-git` for local operations, `@octokit/rest` for GitHub PRs

@@ -8,7 +8,7 @@ export const bedrockClient = new BedrockRuntimeClient({
 });
 
 // Validate model ID format at import time so misconfigurations surface immediately.
-const rawModelId = process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+const rawModelId = process.env.BEDROCK_LLM_MODEL_ID ?? "us.anthropic.claude-sonnet-4-20250514-v1:0";
 
 // Bedrock model IDs follow patterns like:
 //   anthropic.claude-3-sonnet-...
