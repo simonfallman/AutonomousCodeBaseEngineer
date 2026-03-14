@@ -4,8 +4,13 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { TOOL_REGISTRY, TOOL_SCHEMAS } from "./tools.js";
 
+const REQUEST_TIMEOUT_MS = 120_000; // 2 min per Bedrock call
+const TOOL_OUTPUT_MAX_CHARS = 30_000; // truncate tool outputs to prevent context bloat
+const TOOL_TIMEOUT_MS = 300_000; // 5 min max per tool call
+
 const client = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? "us-east-1",
+  requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS },
 });
 
 const MODEL_ID =
@@ -46,6 +51,25 @@ type ClaudeResponse = {
   usage: { input_tokens: number; output_tokens: number };
 };
 
+function truncateOutput(output: string): string {
+  if (output.length <= TOOL_OUTPUT_MAX_CHARS) return output;
+  const half = Math.floor(TOOL_OUTPUT_MAX_CHARS / 2);
+  const trimmed = output.length - TOOL_OUTPUT_MAX_CHARS;
+  return `${output.slice(0, half)}\n\n... (${trimmed.toLocaleString()} characters truncated) ...\n\n${output.slice(-half)}`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   const body = JSON.stringify({
     anthropic_version: "bedrock-2023-05-31",
@@ -62,7 +86,11 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
     body,
   });
 
-  const response = await client.send(command);
+  const response = await withTimeout(
+    client.send(command),
+    REQUEST_TIMEOUT_MS,
+    "Bedrock LLM call"
+  );
   const result = JSON.parse(Buffer.from(response.body).toString("utf-8"));
   return { content: result.content as ContentBlock[], usage: result.usage };
 }
@@ -80,6 +108,7 @@ async function callClaudeWithRetry(messages: Message[], maxRetries = 5): Promise
         message.includes("ThrottlingException") ||
         message.includes("TooManyRequestsException");
       if (!isThrottle || attempt === maxRetries) throw err;
+      console.error(`[agent] Throttled (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms...`);
       await new Promise((r) => setTimeout(r, delay));
       delay = Math.min(delay * 2, 30_000);
     }
@@ -98,6 +127,26 @@ export interface AgentStep {
 export interface AgentUsage {
   inputTokens: number;
   outputTokens: number;
+}
+
+async function executeTool(
+  toolUse: ToolUseBlock,
+  onProgress?: (message: string) => void
+): Promise<{ output: string; step: AgentStep }> {
+  const fn = TOOL_REGISTRY[toolUse.name];
+  let output: string;
+  if (!fn) {
+    output = `Error: unknown tool "${toolUse.name}"`;
+  } else {
+    try {
+      output = await withTimeout(fn(toolUse.input), TOOL_TIMEOUT_MS, `Tool "${toolUse.name}"`);
+      output = truncateOutput(output);
+    } catch (err: unknown) {
+      console.error(`[agent] Tool "${toolUse.name}" failed:`, err);
+      output = `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  return { output, step: { type: "tool_result", tool: toolUse.name, output } };
 }
 
 export async function runAgentLoop(
@@ -128,30 +177,29 @@ export async function runAgentLoop(
 
     if (toolUses.length === 0) break;
 
-    const toolResults: unknown[] = [];
-
+    // Log tool calls
     for (const toolUse of toolUses) {
-      onProgress?.(`[${i + 1}/${maxIterations}] Calling ${toolUse.name}...`);
       steps.push({ type: "tool_call", tool: toolUse.name, input: toolUse.input });
+    }
 
-      let output: string;
-      const fn = TOOL_REGISTRY[toolUse.name];
-      if (!fn) {
-        output = `Error: unknown tool "${toolUse.name}"`;
-      } else {
-        try {
-          output = await fn(toolUse.input);
-        } catch (err: unknown) {
-          console.error(`[agent] Tool "${toolUse.name}" threw an unhandled error:`, err);
-          output = `Error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
+    // Execute tools in parallel when multiple are requested
+    onProgress?.(`[${i + 1}/${maxIterations}] Calling ${toolUses.map((t) => t.name).join(", ")}...`);
+    const results = await Promise.all(
+      toolUses.map((toolUse) => executeTool(toolUse, onProgress))
+    );
 
-      steps.push({ type: "tool_result", tool: toolUse.name, output });
-      toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: output });
+    const toolResults: unknown[] = [];
+    for (let j = 0; j < toolUses.length; j++) {
+      steps.push(results[j].step);
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: toolUses[j].id,
+        content: results[j].output,
+      });
     }
 
     messages.push({ role: "user", content: toolResults });
+    onProgress?.(`[${i + 1}/${maxIterations}] Tools complete, continuing...`);
   }
 
   if (!answer) answer = "Task completed.";
@@ -182,7 +230,11 @@ export async function planTask(task: string): Promise<string> {
     body,
   });
 
-  const response = await client.send(command);
+  const response = await withTimeout(
+    client.send(command),
+    REQUEST_TIMEOUT_MS,
+    "Bedrock planTask call"
+  );
   const result = JSON.parse(Buffer.from(response.body).toString("utf-8"));
   return result.content[0].text as string;
 }

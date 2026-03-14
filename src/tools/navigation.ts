@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { realpathSync } from "fs";
 import path from "path";
 import { glob } from "glob";
 import { applyPatch as diffApplyPatch } from "diff";
@@ -10,13 +11,30 @@ const SKIP_DIRS = new Set([
 ]);
 
 const MAX_GREP_MATCHES = 200;
+const MAX_READ_SIZE = 2 * 1024 * 1024; // 2MB max file read
+const REGEX_MAX_LENGTH = 500; // guard against ReDoS with overly long patterns
 
 export function resolveSafe(relativePath: string): string {
   const repo = getRepoPath();
   const resolved = path.resolve(repo, relativePath);
+
+  // First check: logical path must be within repo (catches ../.. traversal)
   if (!resolved.startsWith(repo + path.sep) && resolved !== repo) {
     throw new Error(`Path escapes repo root: ${relativePath}`);
   }
+
+  // Second check: if the file exists, verify the real path (catches symlink escapes)
+  try {
+    const real = realpathSync(resolved);
+    const realRepo = realpathSync(repo);
+    if (!real.startsWith(realRepo + path.sep) && real !== realRepo) {
+      throw new Error(`Path escapes repo root: ${relativePath}`);
+    }
+  } catch (err) {
+    // File doesn't exist yet — that's fine, the logical check above passed
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
   return resolved;
 }
 
@@ -29,6 +47,10 @@ export async function listFiles(dirPath: string = "."): Promise<string> {
 
 export async function readFile(filePath: string): Promise<string> {
   const target = resolveSafe(filePath);
+  const stats = await fs.stat(target);
+  if (stats.size > MAX_READ_SIZE) {
+    throw new Error(`File too large to read (${(stats.size / 1024 / 1024).toFixed(2)}MB, max ${MAX_READ_SIZE / 1024 / 1024}MB): ${filePath}`);
+  }
   return fs.readFile(target, "utf-8");
 }
 
@@ -72,27 +94,35 @@ async function walkFiles(dir: string): Promise<string[]> {
   return results;
 }
 
+function validateRegex(pattern: string): RegExp | string {
+  if (pattern.length > REGEX_MAX_LENGTH) {
+    return `Regex pattern too long (${pattern.length} chars, max ${REGEX_MAX_LENGTH}). Use a simpler pattern.`;
+  }
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return `Invalid regex pattern: ${pattern}`;
+  }
+}
+
 export async function grepRepo(pattern: string, searchPath?: string): Promise<string> {
   const repoPath = getRepoPath();
   const baseDir = searchPath ? resolveSafe(searchPath) : repoPath;
   const files = await walkFiles(baseDir);
 
-  let re: RegExp;
-  try {
-    re = new RegExp(pattern);
-  } catch (err) {
-    console.error(`[grep] Invalid regex pattern "${pattern}":`, err);
-    return `Invalid regex pattern: ${pattern}`;
-  }
+  const reOrError = validateRegex(pattern);
+  if (typeof reOrError === "string") return reOrError;
+  const re = reOrError;
   const lines: string[] = [];
   let truncated = false;
 
   outer: for (const absPath of files) {
     let content: string;
     try {
+      const stats = await fs.stat(absPath);
+      if (stats.size > MAX_READ_SIZE) continue; // skip huge files
       content = await fs.readFile(absPath, "utf-8");
-    } catch (err) {
-      console.error(`[grep] Failed to read file "${path.relative(repoPath, absPath)}" — skipping:`, err);
+    } catch {
       continue;
     }
     const fileLines = content.split("\n");

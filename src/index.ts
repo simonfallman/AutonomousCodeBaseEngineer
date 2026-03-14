@@ -16,8 +16,18 @@ import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
 function createServer(): McpServer {
   const server = new McpServer({
     name: "autonomous-codebase-engineer",
-    version: "0.1.0",
+    version: "0.2.0",
   });
+
+  // Helper: send a progress notification if the client provided a progressToken
+  function sendProgress(extra: { _meta?: { progressToken?: string | number }; sendNotification: (n: any) => Promise<void> }, progress: number, total: number, message?: string) {
+    const token = extra._meta?.progressToken;
+    if (token === undefined) return;
+    extra.sendNotification({
+      method: "notifications/progress",
+      params: { progressToken: token, progress, total, ...(message ? { message } : {}) },
+    }).catch(() => { /* ignore notification failures */ });
+  }
 
   // --- Repo management ---
 
@@ -160,10 +170,13 @@ function createServer(): McpServer {
     "index_repository",
     "Chunk and embed the current repo into the vector database for semantic search",
     {},
-    async () => {
-      const result = await indexRepository((msg) =>
-        server.sendLoggingMessage({ level: "info", data: msg })
-      );
+    async (_args, extra) => {
+      let step = 0;
+      const result = await indexRepository((msg) => {
+        step++;
+        server.sendLoggingMessage({ level: "info", data: msg });
+        sendProgress(extra, step, step + 1, msg);
+      });
       return { content: [{ type: "text", text: result }] };
     }
   );
@@ -294,9 +307,15 @@ function createServer(): McpServer {
         .default(15)
         .describe("Max tool-call iterations before stopping"),
     },
-    async ({ task, max_iterations }) => {
+    async ({ task, max_iterations }, extra) => {
+      let step = 0;
+      const totalEstimate = max_iterations * 2; // rough estimate for progress bar
+
       const { steps, answer, usage } = await runAgentLoop(task, max_iterations, (msg) => {
+        step++;
         server.sendLoggingMessage({ level: "info", data: msg });
+        // Send progress notification to keep the MCP connection alive
+        sendProgress(extra, step, totalEstimate, msg);
       });
 
       const log = steps
