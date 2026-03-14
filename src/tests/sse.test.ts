@@ -68,7 +68,7 @@ beforeAll(async () => {
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
   const { SSEServerTransport } = await import("@modelcontextprotocol/sdk/server/sse.js");
 
-  const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
+  const sessions = new Map<string, { transport: InstanceType<typeof SSEServerTransport>; server: InstanceType<typeof McpServer> }>();
   const MAX_SESSIONS = 3;
   // Use a fast keepalive interval for testing (200ms instead of 25s)
   const KEEPALIVE_INTERVAL_MS = 200;
