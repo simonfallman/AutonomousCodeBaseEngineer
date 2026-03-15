@@ -91,7 +91,7 @@ beforeAll(async () => {
         res.writeHead(503).end("Too many sessions");
         return;
       }
-      const messageEndpoint = pathname.startsWith("/mcp") ? "/mcp/message" : "/message";
+      const messageEndpoint = "/mcp/message";
       const transport = new SSEServerTransport(messageEndpoint, res);
       const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
       sessions.set(transport.sessionId, { transport, server: mcpServer });
@@ -146,13 +146,11 @@ describe("SSE server", () => {
       expect(result.headers["content-type"]).toContain("text/event-stream");
     });
 
-    it("returns endpoint event with /message path when connecting via /sse", async () => {
+    it("returns endpoint event with /mcp/message path when connecting via /sse", async () => {
       const result = await collectSSE("/sse", 300);
       const allData = result.chunks.join("");
       expect(allData).toContain("event: endpoint");
-      // The message endpoint should NOT have /mcp prefix
-      expect(allData).toMatch(/data:.*\/message\?sessionId=/);
-      expect(allData).not.toMatch(/data:.*\/mcp\/message/);
+      expect(allData).toMatch(/data:.*\/mcp\/message\?sessionId=/);
     });
 
     it("returns endpoint event with /mcp/message path when connecting via /mcp/sse", async () => {

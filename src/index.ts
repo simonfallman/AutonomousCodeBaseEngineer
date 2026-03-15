@@ -409,9 +409,8 @@ if (USE_SSE) {
         res.writeHead(503).end("Too many sessions");
         return;
       }
-      // Determine the message endpoint path based on how the client reached the SSE endpoint.
-      // If client connected via /mcp/sse, messages should go to /mcp/message; otherwise /message.
-      const messageEndpoint = pathname.startsWith("/mcp") ? "/mcp/message" : "/message";
+      // Always use /mcp/message so clients behind nginx (/mcp/ → /) route correctly.
+      const messageEndpoint = "/mcp/message";
       const transport = new SSEServerTransport(messageEndpoint, res);
       const server = createServer();
       sessions.set(transport.sessionId, { transport, server });
