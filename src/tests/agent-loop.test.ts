@@ -3,9 +3,11 @@ import { runAgentLoop } from "../agent/loop.js";
 
 // These tests make real Bedrock API calls.
 // Requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION to be set.
-// Set REPO_PATH to a valid repo (the project itself works).
+// Skip in CI or when credentials are missing.
+const hasCredentials = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+const describeIfCreds = hasCredentials ? describe : describe.skip;
 
-describe("runAgentLoop (real API)", () => {
+describeIfCreds("runAgentLoop (real API)", () => {
   it("completes a simple task and returns reason 'complete'", async () => {
     const result = await runAgentLoop(
       "What is 2 + 2? Answer with just the number, no tool calls needed.",
