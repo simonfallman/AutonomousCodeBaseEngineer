@@ -118,6 +118,15 @@ export interface AgentUsage {
   outputTokens: number;
 }
 
+export type AgentStopReason = "complete" | "max_iterations" | "aborted";
+
+export interface AgentResult {
+  steps: AgentStep[];
+  answer: string;
+  usage: AgentUsage;
+  reason: AgentStopReason;
+}
+
 async function executeTool(
   toolUse: ToolUseBlock,
   onProgress?: (message: string) => void
@@ -141,19 +150,31 @@ async function executeTool(
 export async function runAgentLoop(
   task: string,
   maxIterations = 15,
-  onProgress?: (message: string) => void
-): Promise<{ steps: AgentStep[]; answer: string; usage: AgentUsage }> {
+  onProgress?: (message: string) => void,
+  signal?: AbortSignal,
+): Promise<AgentResult> {
   const messages: Message[] = [{ role: "user", content: task }];
   const steps: AgentStep[] = [];
   let answer = "";
+  let reason: AgentStopReason = "complete";
   const usage: AgentUsage = { inputTokens: 0, outputTokens: 0 };
 
   for (let i = 0; i < maxIterations; i++) {
+    if (signal?.aborted) {
+      reason = "aborted";
+      break;
+    }
+
     onProgress?.(`[${i + 1}/${maxIterations}] Thinking...`);
 
     const response = await callClaudeWithRetry(messages);
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
+
+    if (signal?.aborted) {
+      reason = "aborted";
+      break;
+    }
 
     messages.push({ role: "assistant", content: response.content });
 
@@ -189,13 +210,28 @@ export async function runAgentLoop(
 
     messages.push({ role: "user", content: toolResults });
     onProgress?.(`[${i + 1}/${maxIterations}] Tools complete, continuing...`);
+
+    // Check if this was the last iteration
+    if (i === maxIterations - 1) {
+      reason = "max_iterations";
+    }
+  }
+
+  if (reason === "max_iterations") {
+    answer = answer
+      ? `${answer}\n\n⚠️ Agent stopped: reached maximum ${maxIterations} iterations.`
+      : `Agent stopped: reached maximum ${maxIterations} iterations without completing the task.`;
+  } else if (reason === "aborted") {
+    answer = answer
+      ? `${answer}\n\n⚠️ Agent aborted by caller.`
+      : "Agent aborted before completing the task.";
   }
 
   if (!answer) answer = "Task completed.";
   steps.push({ type: "final_answer", text: answer });
   onProgress?.("Done.");
 
-  return { steps, answer, usage };
+  return { steps, answer, usage, reason };
 }
 
 export async function planTask(task: string): Promise<string> {

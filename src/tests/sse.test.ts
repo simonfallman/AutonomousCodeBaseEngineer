@@ -68,10 +68,12 @@ beforeAll(async () => {
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
   const { SSEServerTransport } = await import("@modelcontextprotocol/sdk/server/sse.js");
 
-  const sessions = new Map<string, { transport: InstanceType<typeof SSEServerTransport>; server: InstanceType<typeof McpServer> }>();
+  const sessions = new Map<string, { transport: InstanceType<typeof SSEServerTransport>; server: InstanceType<typeof McpServer>; lastActivity: number }>();
   const MAX_SESSIONS = 3;
   // Use a fast keepalive interval for testing (200ms instead of 25s)
   const KEEPALIVE_INTERVAL_MS = 200;
+  // Short idle timeout for testing (500ms)
+  const SESSION_IDLE_TIMEOUT_MS = 500;
 
   server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -94,7 +96,7 @@ beforeAll(async () => {
       const messageEndpoint = "/mcp/message";
       const transport = new SSEServerTransport(messageEndpoint, res);
       const mcpServer = new McpServer({ name: "test-server", version: "0.0.1" });
-      sessions.set(transport.sessionId, { transport, server: mcpServer });
+      sessions.set(transport.sessionId, { transport, server: mcpServer, lastActivity: Date.now() });
 
       const keepaliveInterval = setInterval(() => {
         if (!res.writableEnded && !res.destroyed) {
@@ -111,6 +113,7 @@ beforeAll(async () => {
       const sessionId = url.searchParams.get("sessionId") ?? "";
       const session = sessions.get(sessionId);
       if (!session) { res.writeHead(404).end("Session not found"); return; }
+      session.lastActivity = Date.now();
       await session.transport.handlePostMessage(req, res);
     } else if (req.method === "GET" && (pathname === "/health" || pathname === "/mcp/health")) {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -120,12 +123,26 @@ beforeAll(async () => {
     }
   });
 
+  // Idle session reaper (runs every 200ms in tests for fast feedback)
+  const reaperInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      if (now - session.lastActivity > SESSION_IDLE_TIMEOUT_MS) {
+        try { (session.transport as any).res?.destroy(); } catch { /* ignore */ }
+        sessions.delete(id);
+      }
+    }
+  }, 200);
+
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       port = (server.address() as import("net").AddressInfo).port;
       resolve();
     });
   });
+
+  // Clean up reaper on server close
+  server.on("close", () => clearInterval(reaperInterval));
 });
 
 afterAll(async () => {
@@ -240,6 +257,34 @@ describe("SSE server", () => {
       const healthAfter = await rawGet("/health");
       const sessionsAfter = JSON.parse(healthAfter.body).sessions;
       expect(sessionsAfter).toBe(sessionsBefore);
+    });
+
+    it("reaps idle sessions after timeout", async () => {
+      // Connect to SSE (creates a session)
+      const controller = new AbortController();
+      const sessionCreated = new Promise<void>((resolve) => {
+        const req = http.get(`http://127.0.0.1:${port}/sse`, { signal: controller.signal }, (res) => {
+          res.once("data", () => resolve()); // resolve once we get the endpoint event
+          res.on("error", () => {});
+        });
+        req.on("error", () => {});
+      });
+      await sessionCreated;
+
+      // Verify session exists
+      const healthBefore = await rawGet("/health");
+      const sessionsBefore = JSON.parse(healthBefore.body).sessions;
+      expect(sessionsBefore).toBeGreaterThan(0);
+
+      // Wait for idle timeout + reaper interval (500ms timeout + 200ms reaper + buffer)
+      await new Promise((r) => setTimeout(r, 900));
+
+      // Session should have been reaped
+      const healthAfter = await rawGet("/health");
+      const sessionsAfter = JSON.parse(healthAfter.body).sessions;
+      expect(sessionsAfter).toBeLessThan(sessionsBefore);
+
+      controller.abort();
     });
 
     it("rejects new sessions when MAX_SESSIONS is reached", async () => {

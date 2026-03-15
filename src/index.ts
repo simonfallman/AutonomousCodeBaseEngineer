@@ -9,7 +9,7 @@ import { runTests, runLinter, runBuild } from "./tools/testing.js";
 import { indexRepository, semanticSearch } from "./tools/search.js";
 import { createBranch, getCurrentBranch, commitChanges, pushBranch, openPullRequest } from "./tools/git.js";
 import { summarizeFile, findFunctionUsage, analyzeDependencies } from "./tools/intelligence.js";
-import { planTask, runAgentLoop, type AgentStep, type AgentUsage } from "./agent/loop.js";
+import { planTask, runAgentLoop, type AgentStep, type AgentUsage, type AgentResult } from "./agent/loop.js";
 import { getRepoPath, setRepoPath } from "./repo.js";
 import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
 
@@ -337,19 +337,20 @@ function createServer(): McpServer {
       let step = 0;
       const totalEstimate = max_iterations * 2; // rough estimate for progress bar
       const stopHeartbeat = startHeartbeat(extra, "solve_task");
+      const abortController = new AbortController();
 
-      let result: { steps: AgentStep[]; answer: string; usage: AgentUsage };
+      let result: AgentResult;
       try {
         result = await runAgentLoop(task, max_iterations, (msg) => {
           step++;
           server.sendLoggingMessage({ level: "info", data: msg });
           sendProgress(extra, step, totalEstimate, msg);
-        });
+        }, abortController.signal);
       } finally {
         stopHeartbeat();
       }
 
-      const { steps, answer, usage } = result;
+      const { steps, answer, usage, reason } = result;
 
       const log = steps
         .map((s) => {
@@ -360,7 +361,8 @@ function createServer(): McpServer {
         .join("\n");
 
       const tokenSummary = `Tokens: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out`;
-      return { content: [{ type: "text", text: `${log}\n\n---\n${answer}\n\n${tokenSummary}` }] };
+      const reasonTag = reason !== "complete" ? ` [${reason}]` : "";
+      return { content: [{ type: "text", text: `${log}\n\n---\n${answer}\n\n${tokenSummary}${reasonTag}` }] };
     }
   );
 
@@ -376,7 +378,8 @@ if (USE_SSE) {
   const HOST = process.env.HOST ?? "127.0.0.1"; // bind to localhost by default for security
   const API_KEY = process.env.MCP_API_KEY; // optional API key for SSE auth
   const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS ?? "10");
-  const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
+  const SESSION_IDLE_TIMEOUT_MS = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS ?? "300000"); // 5 min default
+  const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer; lastActivity: number }>();
 
   const httpServer = http.createServer(async (req, res) => {
     // CORS headers for mcp-remote and browser-based clients
@@ -413,7 +416,7 @@ if (USE_SSE) {
       const messageEndpoint = "/mcp/message";
       const transport = new SSEServerTransport(messageEndpoint, res);
       const server = createServer();
-      sessions.set(transport.sessionId, { transport, server });
+      sessions.set(transport.sessionId, { transport, server, lastActivity: Date.now() });
 
       // Send SSE keepalive comments every 25s to prevent nginx/proxy idle timeout (default 60s).
       // SSE comments (lines starting with ':') are ignored by clients but keep the TCP connection alive.
@@ -434,6 +437,7 @@ if (USE_SSE) {
       const sessionId = url.searchParams.get("sessionId") ?? "";
       const session = sessions.get(sessionId);
       if (!session) { res.writeHead(404).end("Session not found"); return; }
+      session.lastActivity = Date.now();
       await session.transport.handlePostMessage(req, res);
     } else if (req.method === "GET" && (pathname === "/health" || pathname === "/mcp/health")) {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -443,9 +447,24 @@ if (USE_SSE) {
     }
   });
 
+  // Reap idle sessions periodically
+  const reaperInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      if (now - session.lastActivity > SESSION_IDLE_TIMEOUT_MS) {
+        console.error(`[reaper] Evicting idle session ${id} (idle ${Math.round((now - session.lastActivity) / 1000)}s)`);
+        try { session.transport.close?.(); } catch { /* ignore */ }
+        sessions.delete(id);
+        if (sessions.size === 0) stopWatcher();
+      }
+    }
+  }, 60_000);
+  reaperInterval.unref(); // don't block process exit
+
   httpServer.listen(PORT, HOST, () => {
     console.error(`ACE MCP server listening on ${HOST}:${PORT} (SSE)`);
     if (API_KEY) console.error("[auth] API key authentication enabled");
+    console.error(`[reaper] Idle session timeout: ${SESSION_IDLE_TIMEOUT_MS / 1000}s`);
     indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
   });
 } else {
