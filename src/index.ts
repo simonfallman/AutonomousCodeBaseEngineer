@@ -463,6 +463,12 @@ if (USE_SSE) {
   }, 60_000);
   reaperInterval.unref(); // don't block process exit
 
+  // Allow long-running tool calls (solve_task can take minutes).
+  // Node defaults are 2 min; bump to 10 min so the server never kills the socket before the agent loop finishes.
+  httpServer.requestTimeout = 600_000;
+  httpServer.headersTimeout = 610_000;
+  httpServer.keepAliveTimeout = 600_000;
+
   httpServer.listen(PORT, HOST, () => {
     console.error(`ACE MCP server listening on ${HOST}:${PORT} (SSE)`);
     if (API_KEY) console.error("[auth] API key authentication enabled");
