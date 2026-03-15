@@ -134,6 +134,16 @@ export async function deleteFileChunks(repo: string, filePath: string): Promise<
   await db.query("DELETE FROM code_chunks WHERE repo = $1 AND file_path = $2", [repo, filePath]);
 }
 
+/** Check whether any chunks exist for the given repo. */
+export async function hasChunks(repo: string): Promise<boolean> {
+  const db = getPool();
+  const { rows } = await db.query(
+    "SELECT 1 FROM code_chunks WHERE repo = $1 LIMIT 1",
+    [repo]
+  );
+  return rows.length > 0;
+}
+
 /** Lightweight connectivity probe — throws if the database is unreachable. */
 export async function checkConnection(): Promise<void> {
   const db = getPool();

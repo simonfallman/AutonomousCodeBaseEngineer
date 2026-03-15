@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import { getRepoPath } from "../repo.js";
 import { embed } from "../embeddings/bedrock.js";
-import { setupSchema, upsertChunks, similaritySearch } from "../vectordb/pg.js";
+import { setupSchema, upsertChunks, similaritySearch, hasChunks } from "../vectordb/pg.js";
 import { chunkRepository, chunkLines, LANGUAGE_MAP } from "../chunker.js";
 import type { Chunk } from "../vectordb/pg.js";
 import { repoId, MAX_FILE_SIZE } from "../constants.js";
@@ -101,11 +101,16 @@ export async function semanticSearch(query: string, limit = 5): Promise<string> 
   const repoPath = getRepoPath();
   const name = repoId(repoPath);
 
+  // Auto-index if the repo has no chunks yet
+  if (!(await hasChunks(name))) {
+    await indexRepository();
+  }
+
   const queryEmbedding = await embed(query);
   const results = await similaritySearch(name, queryEmbedding, limit);
 
   if (results.length === 0) {
-    return `No results found. Run index_repository first.`;
+    return `No results found for "${query}".`;
   }
 
   return results

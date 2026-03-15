@@ -58,6 +58,8 @@ function createServer(): McpServer {
     async ({ path }) => {
       setRepoPath(path);
       await restartWatcher();
+      // Re-index in the background so semantic search works immediately on the new repo
+      indexRepository().catch((err) => console.error(`[index] Failed after set_repo:`, err));
       return { content: [{ type: "text", text: `Repo set to: ${getRepoPath()}` }] };
     }
   );
