@@ -165,11 +165,12 @@ export async function runAgentLoop(
       break;
     }
 
-    onProgress?.(`[${i + 1}/${maxIterations}] Thinking...`);
+    onProgress?.(`[${i + 1}/${maxIterations}] Thinking... (${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out so far)`);
 
     const response = await callClaudeWithRetry(messages);
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
+    onProgress?.(`[${i + 1}/${maxIterations}] +${response.usage.input_tokens.toLocaleString()} in / +${response.usage.output_tokens.toLocaleString()} out (total: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out)`);
 
     if (signal?.aborted) {
       reason = "aborted";
