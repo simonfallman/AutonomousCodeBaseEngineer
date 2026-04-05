@@ -17,6 +17,10 @@ describe("slugify", () => {
       "a-very-long-task-description-that-exceed"
     );
   });
+
+  it("converts underscores to hyphens", () => {
+    expect(slugify("foo_bar")).toBe("foo-bar");
+  });
 });
 
 describe("buildReport", () => {
@@ -60,6 +64,31 @@ describe("buildReport", () => {
     expect(report).toContain("trending.py");
     expect(report).toContain("tests/test_trending.py");
     expect(report).not.toContain("README.md");
+  });
+
+  it("falls back to result.answer for key findings when no final_answer steps exist", () => {
+    const result: AgentResult = {
+      steps: [],
+      answer: "Fallback answer text.",
+      usage: { inputTokens: 10, outputTokens: 5 },
+      reason: "complete",
+    };
+    const report = buildReport("Fix bug", "simonfallman/trending", result, "2026-04-05");
+    expect(report).toContain("## Key Findings");
+    expect(report).toContain("Fallback answer text.");
+  });
+
+  it("includes delete_file in changes made", () => {
+    const result: AgentResult = {
+      steps: [
+        { type: "tool_call", tool: "delete_file", input: { path: "old_script.py" } },
+      ],
+      answer: "Done.",
+      usage: { inputTokens: 10, outputTokens: 5 },
+      reason: "complete",
+    };
+    const report = buildReport("Remove old script", "simonfallman/trending", result, "2026-04-05");
+    expect(report).toContain("old_script.py");
   });
 
   it("extracts Claude reasoning from text blocks as key findings", () => {
