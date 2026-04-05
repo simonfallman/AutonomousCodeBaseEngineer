@@ -2,6 +2,11 @@
 import { describe, it, expect } from "vitest";
 import { slugify, buildReport } from "../reporter.js";
 import type { AgentResult } from "../agent/loop.js";
+import { writeReport } from "../reporter.js";
+import { mkdtemp, rm } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
+import { execSync } from "child_process";
 
 describe("slugify", () => {
   it("lowercases and hyphenates words", () => {
@@ -132,4 +137,40 @@ describe("buildReport", () => {
     expect(report).toContain("## Key Findings");
     expect(report).toContain("The dedup function was missing the weekly period. Fixed.");
   });
+});
+
+describe("writeReport", () => {
+  it("writes the report file to ACE/ subdir and commits it to vault git", async () => {
+    const vaultDir = await mkdtemp(join(tmpdir(), "ace-test-vault-"));
+    try {
+      execSync(`git init "${vaultDir}"`);
+      execSync(`git -C "${vaultDir}" config user.email "test@test.com"`);
+      execSync(`git -C "${vaultDir}" config user.name "Test"`);
+      execSync(`git -C "${vaultDir}" commit --allow-empty -m "init"`);
+
+      const result: AgentResult = {
+        steps: [],
+        answer: "Task complete.",
+        usage: { inputTokens: 10, outputTokens: 5 },
+        reason: "complete",
+      };
+
+      const filePath = await writeReport(
+        "Fix the streak bug",
+        "simonfallman/trending",
+        result,
+        vaultDir
+      );
+
+      const { readFile } = await import("fs/promises");
+      const content = await readFile(filePath, "utf-8");
+      expect(content).toContain("Fix the streak bug");
+      expect(content).toContain("simonfallman/trending");
+
+      const log = execSync(`git -C "${vaultDir}" log --oneline`).toString();
+      expect(log).toContain("ACE findings");
+    } finally {
+      await rm(vaultDir, { recursive: true, force: true });
+    }
+  }, 15000);
 });

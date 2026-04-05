@@ -1,4 +1,7 @@
 // src/reporter.ts
+import { mkdir, writeFile } from "fs/promises";
+import { join } from "path";
+import { simpleGit } from "simple-git";
 import type { AgentResult, AgentStep } from "./agent/loop.js";
 
 const WRITE_TOOLS = new Set(["write_file", "apply_patch", "delete_file"]);
@@ -84,4 +87,35 @@ export function buildReport(
   lines.push(`_Tokens: ${result.usage.inputTokens.toLocaleString()} in / ${result.usage.outputTokens.toLocaleString()} out_`);
 
   return lines.join("\n");
+}
+
+export async function writeReport(
+  task: string,
+  repoName: string,
+  result: AgentResult,
+  vaultPath: string,
+  commitHash?: string
+): Promise<string> {
+  const date = new Date().toISOString().slice(0, 10);
+  const repoSlug = repoName.replace(/\//g, "-");
+  const taskSlug = slugify(task);
+  const filename = `${date}-${repoSlug}-${taskSlug}.md`;
+
+  const aceDir = join(vaultPath, "ACE");
+  await mkdir(aceDir, { recursive: true });
+
+  const filePath = join(aceDir, filename);
+  const content = buildReport(task, repoName, result, date, commitHash);
+  await writeFile(filePath, content, "utf-8");
+
+  const git = simpleGit(vaultPath);
+  await git.add(filePath);
+  await git.commit(`ACE findings: ${repoName} — ${taskSlug}`);
+  try {
+    await git.push();
+  } catch (err) {
+    console.error(`[reporter] Failed to push vault: ${err instanceof Error ? err.message : err}`);
+  }
+
+  return filePath;
 }
