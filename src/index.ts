@@ -1,8 +1,6 @@
 import "dotenv/config";
-import http from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { listFiles, readFile, writeFile, deleteFile, searchFiles, grepRepo, applyPatch } from "./tools/navigation.js";
 import { runTests, runLinter, runBuild } from "./tools/testing.js";
@@ -12,6 +10,33 @@ import { summarizeFile, findFunctionUsage, analyzeDependencies } from "./tools/i
 import { planTask, runAgentLoop, type AgentStep, type AgentUsage, type AgentResult } from "./agent/loop.js";
 import { getRepoPath, setRepoPath } from "./repo.js";
 import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
+import { writeReport } from "./reporter.js";
+import { simpleGit } from "simple-git";
+import { homedir } from "os";
+import { join } from "path";
+
+async function getRepoName(): Promise<string> {
+  try {
+    const git = simpleGit(getRepoPath());
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find((r) => r.name === "origin");
+    if (!origin?.refs?.fetch) return getRepoPath().split("/").slice(-1)[0];
+    const match = origin.refs.fetch.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+    return match ? match[1] : getRepoPath().split("/").slice(-1)[0];
+  } catch {
+    return getRepoPath().split("/").slice(-1)[0];
+  }
+}
+
+function extractCommitHash(steps: AgentStep[]): string | undefined {
+  for (const step of steps) {
+    if (step.type === "tool_result" && step.tool === "commit_changes" && step.output) {
+      const match = step.output.match(/\b([a-f0-9]{7,40})\b/);
+      if (match) return match[1];
+    }
+  }
+  return undefined;
+}
 
 function createServer(): McpServer {
   const server = new McpServer({
@@ -354,6 +379,15 @@ function createServer(): McpServer {
 
       const { steps, answer, usage, reason } = result;
 
+      // Write findings report to Obsidian vault (non-blocking — never fail the tool call)
+      const vaultPath = join(homedir(), "obsidian");
+      getRepoName().then((repoName) => {
+        const commitHash = extractCommitHash(steps);
+        return writeReport(task, repoName, result, vaultPath, commitHash);
+      }).catch((err) =>
+        console.error(`[reporter] Failed to write findings: ${err instanceof Error ? err.message : err}`)
+      );
+
       const log = steps
         .map((s) => {
           if (s.type === "tool_call") return `→ ${s.tool}(${JSON.stringify(s.input)})`;
@@ -373,113 +407,9 @@ function createServer(): McpServer {
 
 // --- Start ---
 
-const USE_SSE = process.env.MCP_TRANSPORT === "sse";
-
-if (USE_SSE) {
-  const PORT = parseInt(process.env.PORT ?? "3001");
-  const HOST = process.env.HOST ?? "127.0.0.1"; // bind to localhost by default for security
-  const API_KEY = process.env.MCP_API_KEY; // optional API key for SSE auth
-  const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS ?? "10");
-  const SESSION_IDLE_TIMEOUT_MS = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS ?? "300000"); // 5 min default
-  const sessions = new Map<string, { transport: SSEServerTransport; server: McpServer; lastActivity: number }>();
-
-  const httpServer = http.createServer(async (req, res) => {
-    // CORS headers for mcp-remote and browser-based clients
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-    // Handle CORS preflight
-    if (req.method === "OPTIONS") {
-      res.writeHead(204).end();
-      return;
-    }
-
-    // API key check (if configured)
-    if (API_KEY) {
-      const authHeader = req.headers.authorization;
-      if (authHeader !== `Bearer ${API_KEY}`) {
-        res.writeHead(401).end("Unauthorized");
-        return;
-      }
-    }
-
-    const url = new URL(req.url ?? "/", `http://localhost`);
-
-    // Normalize paths: accept both /sse and /mcp/sse (nginx may or may not strip prefix)
-    const pathname = url.pathname;
-
-    if (req.method === "GET" && (pathname === "/sse" || pathname === "/mcp/sse")) {
-      if (sessions.size >= MAX_SESSIONS) {
-        res.writeHead(503).end("Too many sessions");
-        return;
-      }
-      // Always use /mcp/message so clients behind nginx (/mcp/ → /) route correctly.
-      const messageEndpoint = "/mcp/message";
-      const transport = new SSEServerTransport(messageEndpoint, res);
-      const server = createServer();
-      sessions.set(transport.sessionId, { transport, server, lastActivity: Date.now() });
-
-      // Send SSE keepalive comments every 25s to prevent nginx/proxy idle timeout (default 60s).
-      // SSE comments (lines starting with ':') are ignored by clients but keep the TCP connection alive.
-      const keepaliveInterval = setInterval(() => {
-        if (!res.writableEnded && !res.destroyed) {
-          res.write(":keepalive\n\n");
-        }
-      }, 25_000);
-
-      res.on("close", () => {
-        clearInterval(keepaliveInterval);
-        sessions.delete(transport.sessionId);
-        if (sessions.size === 0) stopWatcher();
-      });
-      await server.connect(transport);
-      startWatcher();
-    } else if (req.method === "POST" && (pathname === "/message" || pathname === "/mcp/message")) {
-      const sessionId = url.searchParams.get("sessionId") ?? "";
-      const session = sessions.get(sessionId);
-      if (!session) { res.writeHead(404).end("Session not found"); return; }
-      session.lastActivity = Date.now();
-      await session.transport.handlePostMessage(req, res);
-    } else if (req.method === "GET" && (pathname === "/health" || pathname === "/mcp/health")) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", sessions: sessions.size }));
-    } else {
-      res.writeHead(404).end("Not found");
-    }
-  });
-
-  // Reap idle sessions periodically
-  const reaperInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of sessions) {
-      if (now - session.lastActivity > SESSION_IDLE_TIMEOUT_MS) {
-        console.error(`[reaper] Evicting idle session ${id} (idle ${Math.round((now - session.lastActivity) / 1000)}s)`);
-        try { session.transport.close?.(); } catch { /* ignore */ }
-        sessions.delete(id);
-        if (sessions.size === 0) stopWatcher();
-      }
-    }
-  }, 60_000);
-  reaperInterval.unref(); // don't block process exit
-
-  // Allow long-running tool calls (solve_task can take minutes).
-  // Node defaults are 2 min; bump to 10 min so the server never kills the socket before the agent loop finishes.
-  httpServer.requestTimeout = 600_000;
-  httpServer.headersTimeout = 610_000;
-  httpServer.keepAliveTimeout = 600_000;
-
-  httpServer.listen(PORT, HOST, () => {
-    console.error(`ACE MCP server listening on ${HOST}:${PORT} (SSE)`);
-    if (API_KEY) console.error("[auth] API key authentication enabled");
-    console.error(`[reaper] Idle session timeout: ${SESSION_IDLE_TIMEOUT_MS / 1000}s`);
-    indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
-  });
-} else {
-  const transport = new StdioServerTransport();
-  const server = createServer();
-  transport.onclose = () => stopWatcher();
-  await server.connect(transport);
-  startWatcher();
-  indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
-}
+const transport = new StdioServerTransport();
+const server = createServer();
+transport.onclose = () => stopWatcher();
+await server.connect(transport);
+startWatcher();
+indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
