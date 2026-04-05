@@ -32,7 +32,7 @@ describe("buildReport", () => {
       reason: "complete",
     };
     const report = buildReport("Fix the bug", "simonfallman/trending", result, "2026-04-05");
-    expect(report).toContain("# fix-the-bug");
+    expect(report).toContain("# Fix the bug");
     expect(report).toContain("simonfallman/trending");
     expect(report).toContain("2026-04-05");
   });
@@ -89,6 +89,18 @@ describe("buildReport", () => {
     };
     const report = buildReport("Remove old script", "simonfallman/trending", result, "2026-04-05");
     expect(report).toContain("old_script.py");
+  });
+
+  it("includes commit hash when provided", () => {
+    const result: AgentResult = {
+      steps: [],
+      answer: "Done.",
+      usage: { inputTokens: 10, outputTokens: 5 },
+      reason: "complete",
+    };
+    const report = buildReport("Fix bug", "simonfallman/trending", result, "2026-04-05", "abc1234");
+    expect(report).toContain("**Commit:**");
+    expect(report).toContain("abc1234");
   });
 
   it("extracts Claude reasoning from text blocks as key findings", () => {

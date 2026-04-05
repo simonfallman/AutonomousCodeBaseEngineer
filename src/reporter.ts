@@ -18,7 +18,8 @@ function extractChangedFiles(steps: AgentStep[]): string[] {
   const files: string[] = [];
   for (const step of steps) {
     if (step.type === "tool_call" && step.tool && WRITE_TOOLS.has(step.tool)) {
-      const path = step.input?.path as string | undefined;
+      const raw = step.input?.path;
+      const path = typeof raw === "string" && raw.length > 0 ? raw : undefined;
       if (path) files.push(path);
     }
   }
@@ -26,12 +27,14 @@ function extractChangedFiles(steps: AgentStep[]): string[] {
 }
 
 function extractFindings(steps: AgentStep[], answer: string): string[] {
+  // Extract intermediate reasoning: text blocks that aren't the final answer
   const texts: string[] = [];
   for (const step of steps) {
-    if (step.type === "final_answer" && step.text?.trim()) {
-      texts.push(step.text.trim());
+    if (step.type === "tool_result" && step.tool === "run_tests" && step.output?.trim()) {
+      texts.push(`Test results: ${step.output.trim().slice(0, 500)}`);
     }
   }
+  // Fall back to answer summary if no intermediate findings
   if (texts.length === 0 && answer.trim()) texts.push(answer.trim());
   return texts;
 }
@@ -48,7 +51,7 @@ export function buildReport(
   const findings = extractFindings(result.steps, result.answer);
 
   const lines: string[] = [
-    `# ${slug}`,
+    `# ${task}`,
     `> ${repoName} | ${date}`,
     ``,
     `## Task`,
