@@ -103,7 +103,21 @@ describe("buildReport", () => {
     expect(report).toContain("abc1234");
   });
 
-  it("extracts Claude reasoning from text blocks as key findings", () => {
+  it("includes run_tests output in key findings", () => {
+    const result: AgentResult = {
+      steps: [
+        { type: "tool_result", tool: "run_tests", output: "5 passed, 0 failed" },
+      ],
+      answer: "All tests pass.",
+      usage: { inputTokens: 10, outputTokens: 5 },
+      reason: "complete",
+    };
+    const report = buildReport("Fix bug", "simonfallman/trending", result, "2026-04-05");
+    expect(report).toContain("## Key Findings");
+    expect(report).toContain("Test results: 5 passed, 0 failed");
+  });
+
+  it("falls back to answer for key findings when no run_tests output exists", () => {
     const result: AgentResult = {
       steps: [
         { type: "tool_call", tool: "read_file", input: { path: "trending.py" } },

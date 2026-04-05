@@ -46,7 +46,6 @@ export function buildReport(
   date: string,
   commitHash?: string
 ): string {
-  const slug = slugify(task);
   const changedFiles = extractChangedFiles(result.steps);
   const findings = extractFindings(result.steps, result.answer);
 
