@@ -1,7 +1,10 @@
 import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { bedrockClient, LLM_MODEL_ID, REQUEST_TIMEOUT_MS } from "../llm/client.js";
 import { complete } from "../llm/bedrock.js";
-import { TOOL_REGISTRY, TOOL_SCHEMAS } from "./tools.js";
+import { TOOL_REGISTRY, TOOL_SCHEMAS, type ToolFn } from "./tools.js";
+// type-only imports are erased at runtime — no circular dep at load time
+import type { GroundedPlan } from "./planner.js";
+import type { ExecutionResult } from "./executor.js";
 
 const TOOL_OUTPUT_MAX_CHARS = 30_000; // truncate tool outputs to prevent context bloat
 const TOOL_TIMEOUT_MS = 300_000; // 5 min max per tool call
@@ -41,6 +44,8 @@ type ClaudeResponse = {
   usage: { input_tokens: number; output_tokens: number };
 };
 
+type ToolSchema = { name: string; description: string; input_schema: Record<string, unknown> };
+
 function truncateOutput(output: string): string {
   if (output.length <= TOOL_OUTPUT_MAX_CHARS) return output;
   const half = Math.floor(TOOL_OUTPUT_MAX_CHARS / 2);
@@ -60,12 +65,12 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
+async function callClaude(messages: Message[], schemas: ToolSchema[]): Promise<ClaudeResponse> {
   const body = JSON.stringify({
     anthropic_version: "bedrock-2023-05-31",
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
-    tools: TOOL_SCHEMAS,
+    tools: schemas,
     messages,
   });
 
@@ -85,11 +90,11 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   return { content: result.content as ContentBlock[], usage: result.usage };
 }
 
-async function callClaudeWithRetry(messages: Message[], maxRetries = 5): Promise<ClaudeResponse> {
+async function callClaudeWithRetry(messages: Message[], schemas: ToolSchema[], maxRetries = 5): Promise<ClaudeResponse> {
   let delay = 1000;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await callClaude(messages);
+      return await callClaude(messages, schemas);
     } catch (err: unknown) {
       const name = (err as Record<string, unknown>).name as string | undefined;
       const message = err instanceof Error ? err.message : "";
@@ -130,9 +135,10 @@ export interface AgentResult {
 
 async function executeTool(
   toolUse: ToolUseBlock,
+  registry: Record<string, ToolFn>,
   onProgress?: (message: string) => void
 ): Promise<{ output: string; step: AgentStep }> {
-  const fn = TOOL_REGISTRY[toolUse.name];
+  const fn = registry[toolUse.name];
   let output: string;
   if (!fn) {
     output = `Error: unknown tool "${toolUse.name}"`;
@@ -153,7 +159,14 @@ export async function runAgentLoop(
   maxIterations = 15,
   onProgress?: (message: string) => void,
   signal?: AbortSignal,
+  options?: {
+    toolRegistry?: Record<string, ToolFn>;
+    toolSchemas?: ToolSchema[];
+  }
 ): Promise<AgentResult> {
+  const registry = options?.toolRegistry ?? TOOL_REGISTRY;
+  const schemas = options?.toolSchemas ?? (TOOL_SCHEMAS as ToolSchema[]);
+
   const messages: Message[] = [{ role: "user", content: task }];
   const steps: AgentStep[] = [];
   let answer = "";
@@ -168,7 +181,7 @@ export async function runAgentLoop(
 
     onProgress?.(`[${i + 1}/${maxIterations}] Thinking... (${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out so far)`);
 
-    const response = await callClaudeWithRetry(messages);
+    const response = await callClaudeWithRetry(messages, schemas);
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
     onProgress?.(`[${i + 1}/${maxIterations}] +${response.usage.input_tokens.toLocaleString()} in / +${response.usage.output_tokens.toLocaleString()} out (total: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out)`);
@@ -197,7 +210,7 @@ export async function runAgentLoop(
     // Execute tools in parallel when multiple are requested
     onProgress?.(`[${i + 1}/${maxIterations}] Calling ${toolUses.map((t) => t.name).join(", ")}...`);
     const results = await Promise.all(
-      toolUses.map((toolUse) => executeTool(toolUse, onProgress))
+      toolUses.map((toolUse) => executeTool(toolUse, registry, onProgress))
     );
 
     const toolResults: unknown[] = [];
@@ -239,6 +252,98 @@ export async function runAgentLoop(
 export async function planTask(task: string): Promise<string> {
   const system =
     "You are a senior software engineer. Given a task description and a list of available tools, produce a concise numbered step-by-step plan to complete the task. Do not execute anything — only plan.";
-  const userMessage = `Available tools: ${TOOL_SCHEMAS.map((t) => t.name).join(", ")}\n\nTask: ${task}`;
+  const userMessage = `Available tools: ${(TOOL_SCHEMAS as ToolSchema[]).map((t) => t.name).join(", ")}\n\nTask: ${task}`;
   return complete(system, userMessage);
+}
+
+export interface CoordinatedResult {
+  plan: GroundedPlan;
+  executionResults: ExecutionResult[];
+  answer: string;
+  usage: AgentUsage;
+}
+
+export async function runCoordinatedLoop(
+  task: string,
+  maxIterations = 15,
+  onProgress?: (message: string) => void,
+  signal?: AbortSignal
+): Promise<CoordinatedResult> {
+  // Dynamic imports break the circular dependency at load time
+  const { runPlannerLoop } = await import("./planner.js");
+  const { runExecutorLoop } = await import("./executor.js");
+
+  const planIterations = Math.max(5, Math.floor(maxIterations * 0.4));
+  const executeIterationsPerItem = Math.min(8, Math.max(4, maxIterations - planIterations));
+
+  // Phase 1: plan
+  onProgress?.("[plan] Exploring repository and identifying issues...");
+  const plan = await runPlannerLoop(task, planIterations, (msg) =>
+    onProgress?.(`[plan] ${msg}`)
+  );
+  onProgress?.(`[plan] Found ${plan.items.length} item(s): ${plan.summary}`);
+
+  if (plan.items.length === 0) {
+    return {
+      plan,
+      executionResults: [],
+      answer: `Planning complete. ${plan.summary} No fixes required.`,
+      usage: { inputTokens: 0, outputTokens: 0 },
+    };
+  }
+
+  // Phase 2: execute each item
+  const executionResults: ExecutionResult[] = [];
+  const usage: AgentUsage = { inputTokens: 0, outputTokens: 0 };
+
+  for (let i = 0; i < plan.items.length; i++) {
+    if (signal?.aborted) break;
+
+    const item = plan.items[i];
+    onProgress?.(`[execute ${i + 1}/${plan.items.length}] Fixing: ${item.issue} in ${item.file}`);
+
+    const execResult = await runExecutorLoop(item, executeIterationsPerItem, (msg) =>
+      onProgress?.(`[execute ${i + 1}/${plan.items.length}] ${msg}`)
+    );
+    executionResults.push(execResult);
+
+    const status = execResult.success ? "✓" : "✗";
+    onProgress?.(`[execute ${i + 1}/${plan.items.length}] ${status} ${execResult.output.slice(0, 100)}`);
+  }
+
+  const succeeded = executionResults.filter((r) => r.success);
+  const failed = executionResults.filter((r) => !r.success);
+  const allChanged = [...new Set(executionResults.flatMap((r) => r.filesChanged))];
+
+  const lines = [
+    `## Plan: ${plan.summary}`,
+    ``,
+    `**Fixes applied:** ${succeeded.length}/${plan.items.length}`,
+  ];
+
+  if (succeeded.length > 0) {
+    lines.push(``, `### Applied`);
+    for (const r of succeeded) {
+      lines.push(`- **${r.item.file}**: ${r.output.replace(/^DONE:\s*/i, "")}`);
+    }
+  }
+
+  if (failed.length > 0) {
+    lines.push(``, `### Failed`);
+    for (const r of failed) {
+      lines.push(`- **${r.item.file}**: ${r.output.replace(/^FAILED:\s*/i, "")}`);
+    }
+  }
+
+  if (allChanged.length > 0) {
+    lines.push(``, `### Files changed`);
+    for (const f of allChanged) lines.push(`- \`${f}\``);
+  }
+
+  return {
+    plan,
+    executionResults,
+    answer: lines.join("\n"),
+    usage,
+  };
 }

@@ -30,6 +30,22 @@ export const TOOL_REGISTRY: Record<string, ToolFn> = {
   analyze_dependencies: () => analyzeDependencies(),
 };
 
+// --- Tool subsets for phase-restricted loops ---
+
+// Tools the planner may call — read/search only, no writes, no git, no test runners
+const READ_TOOL_NAMES = new Set([
+  "list_files", "read_file", "search_files", "grep",
+  "semantic_search", "index_repository",
+  "summarize_file", "find_function_usage", "analyze_dependencies",
+]);
+
+// Tools the executor may call — read + write + verify, no git (coordinator commits)
+const EXECUTE_TOOL_NAMES = new Set([
+  "list_files", "read_file", "search_files", "grep",
+  "write_file", "delete_file", "apply_patch",
+  "run_tests", "run_linter", "run_build",
+]);
+
 // Claude tool_use schema definitions
 export const TOOL_SCHEMAS = [
   {
@@ -197,3 +213,15 @@ export const TOOL_SCHEMAS = [
     input_schema: { type: "object", properties: {} },
   },
 ];
+
+export const READ_TOOL_REGISTRY: Record<string, ToolFn> = Object.fromEntries(
+  Object.entries(TOOL_REGISTRY).filter(([name]) => READ_TOOL_NAMES.has(name))
+);
+
+export const READ_TOOL_SCHEMAS = TOOL_SCHEMAS.filter((s) => READ_TOOL_NAMES.has(s.name));
+
+export const EXECUTE_TOOL_REGISTRY: Record<string, ToolFn> = Object.fromEntries(
+  Object.entries(TOOL_REGISTRY).filter(([name]) => EXECUTE_TOOL_NAMES.has(name))
+);
+
+export const EXECUTE_TOOL_SCHEMAS = TOOL_SCHEMAS.filter((s) => EXECUTE_TOOL_NAMES.has(s.name));

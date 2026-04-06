@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { runAgentLoop } from "../agent/loop.js";
+import { runAgentLoop, runCoordinatedLoop } from "../agent/loop.js";
+import type { ToolFn } from "../agent/tools.js";
 
 // These tests make real Bedrock API calls.
 // Requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION to be set.
@@ -68,6 +69,45 @@ describeIfCreds("runAgentLoop (real API)", () => {
 
     expect(result.reason).toBe("aborted");
   }, 60_000);
+
+  it("uses custom tool registry when provided", async () => {
+    const called: string[] = [];
+    const customRegistry: Record<string, ToolFn> = {
+      list_files: async (_input) => {
+        called.push("list_files");
+        return "custom_result.ts";
+      },
+    };
+    const customSchemas = [
+      {
+        name: "list_files",
+        description: "List files",
+        input_schema: { type: "object" as const, properties: { path: { type: "string" } } },
+      },
+    ];
+
+    const result = await runAgentLoop(
+      "List files in the repo root and report what you see.",
+      5,
+      undefined,
+      undefined,
+      { toolRegistry: customRegistry, toolSchemas: customSchemas }
+    );
+
+    expect(result.steps.some((s) => s.type === "tool_call" && s.tool === "list_files")).toBe(true);
+    expect(called).toContain("list_files");
+  }, 30_000);
+
+  it("runCoordinatedLoop returns a CoordinatedResult with plan and executionResults", async () => {
+    const result = await runCoordinatedLoop(
+      "Check if src/agent/planner.ts exists and has any obvious syntax issues. Read the file.",
+      10
+    );
+
+    expect(typeof result.answer).toBe("string");
+    expect(Array.isArray(result.plan.items)).toBe(true);
+    expect(Array.isArray(result.executionResults)).toBe(true);
+  }, 180_000);
 
   it("reports progress callbacks", async () => {
     const progress: string[] = [];

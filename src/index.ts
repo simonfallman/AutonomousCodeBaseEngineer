@@ -7,7 +7,7 @@ import { runTests, runLinter, runBuild } from "./tools/testing.js";
 import { indexRepository, semanticSearch } from "./tools/search.js";
 import { createBranch, getCurrentBranch, commitChanges, pushBranch, openPullRequest } from "./tools/git.js";
 import { summarizeFile, findFunctionUsage, analyzeDependencies } from "./tools/intelligence.js";
-import { planTask, runAgentLoop, type AgentStep, type AgentResult } from "./agent/loop.js";
+import { planTask, runCoordinatedLoop, type AgentStep } from "./agent/loop.js";
 import { getRepoPath, setRepoPath } from "./repo.js";
 import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
 import { writeReport } from "./reporter.js";
@@ -28,15 +28,6 @@ async function getRepoName(): Promise<string> {
   }
 }
 
-function extractCommitHash(steps: AgentStep[]): string | undefined {
-  for (const step of steps) {
-    if (step.type === "tool_result" && step.tool === "commit_changes" && step.output) {
-      const match = step.output.match(/\b([a-f0-9]{7,40})\b/);
-      if (match) return match[1];
-    }
-  }
-  return undefined;
-}
 
 function createServer(): McpServer {
   const server = new McpServer({
@@ -349,7 +340,7 @@ function createServer(): McpServer {
 
   server.tool(
     "solve_task",
-    "Autonomously plan and execute a task using a ReAct agent loop (Claude + tools)",
+    "Autonomously plan and execute a task using a plan/execute ReAct loop (Claude + tools)",
     {
       task: z.string().describe("Natural language task description"),
       max_iterations: z
@@ -358,47 +349,48 @@ function createServer(): McpServer {
         .min(1)
         .max(30)
         .default(15)
-        .describe("Max tool-call iterations before stopping"),
+        .describe("Total iteration budget split between planning and execution phases"),
     },
     async ({ task, max_iterations }, extra) => {
-      let step = 0;
-      const totalEstimate = max_iterations * 2; // rough estimate for progress bar
       const stopHeartbeat = startHeartbeat(extra, "solve_task");
       const abortController = new AbortController();
 
-      let result: AgentResult;
+      let coordResult: Awaited<ReturnType<typeof runCoordinatedLoop>>;
       try {
-        result = await runAgentLoop(task, max_iterations, (msg) => {
-          step++;
+        coordResult = await runCoordinatedLoop(task, max_iterations, (msg) => {
           server.sendLoggingMessage({ level: "info", data: msg });
-          sendProgress(extra, step, totalEstimate, msg);
+          sendProgress(extra, 0, 1, msg);
         }, abortController.signal);
       } finally {
         stopHeartbeat();
       }
 
-      const { steps, answer, usage, reason } = result;
+      const { plan, executionResults, answer } = coordResult;
 
-      // Write findings report to Obsidian vault (non-blocking — never fail the tool call)
+      // Write findings to Obsidian vault (non-blocking — never fail the tool call)
       const vaultPath = join(homedir(), "obsidian");
       getRepoName().then((repoName) => {
-        const commitHash = extractCommitHash(steps);
-        return writeReport(task, repoName, result, vaultPath, commitHash);
+        const steps: AgentStep[] = executionResults.flatMap((r) =>
+          r.filesChanged.map((f) => ({
+            type: "tool_call" as const,
+            tool: "write_file",
+            input: { path: f },
+          }))
+        );
+        return writeReport(task, repoName, { steps, answer, usage: coordResult.usage, reason: "complete" }, vaultPath);
       }).catch((err) =>
         console.error(`[reporter] Failed to write findings: ${err instanceof Error ? err.message : err}`)
       );
 
-      const log = steps
-        .map((s) => {
-          if (s.type === "tool_call") return `→ ${s.tool}(${JSON.stringify(s.input)})`;
-          if (s.type === "tool_result") return `← ${s.tool}: ${s.output?.slice(0, 300)}${(s.output?.length ?? 0) > 300 ? "…" : ""}`;
-          return `\n✓ ${s.text}`;
-        })
-        .join("\n");
+      const planSummary = `Plan: ${plan.items.length} item(s) — ${plan.summary}`;
+      const resultSummary = `Applied: ${executionResults.filter((r) => r.success).length}/${executionResults.length}`;
 
-      const tokenSummary = `Tokens: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out`;
-      const reasonTag = reason !== "complete" ? ` [${reason}]` : "";
-      return { content: [{ type: "text", text: `${log}\n\n---\n${answer}\n\n${tokenSummary}${reasonTag}` }] };
+      return {
+        content: [{
+          type: "text",
+          text: `${planSummary}\n${resultSummary}\n\n---\n\n${answer}`,
+        }],
+      };
     }
   );
 
