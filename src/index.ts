@@ -7,7 +7,7 @@ import { runTests, runLinter, runBuild } from "./tools/testing.js";
 import { indexRepository, semanticSearch } from "./tools/search.js";
 import { createBranch, getCurrentBranch, commitChanges, pushBranch, openPullRequest } from "./tools/git.js";
 import { summarizeFile, findFunctionUsage, analyzeDependencies } from "./tools/intelligence.js";
-import { planTask, runAgentLoop, type AgentStep, type AgentUsage, type AgentResult } from "./agent/loop.js";
+import { planTask, runAgentLoop, type AgentStep, type AgentResult } from "./agent/loop.js";
 import { getRepoPath, setRepoPath } from "./repo.js";
 import { startWatcher, stopWatcher, restartWatcher } from "./watcher.js";
 import { writeReport } from "./reporter.js";

@@ -50,13 +50,16 @@ function sanitizeBranchName(branchName: string): string {
 }
 
 export async function createBranch(branchName: string): Promise<string> {
-  if (PROTECTED_BRANCHES.has(branchName)) {
-    throw new Error(`Cannot create a branch named "${branchName}" — that's a protected branch name.`);
-  }
-  
+  // Sanitize first so the protected-branch check sees the final name that git would use.
+  // Without this, "main " (trailing space) bypasses the check but becomes "main" after sanitization.
   const sanitized = sanitizeBranchName(branchName);
+
+  if (PROTECTED_BRANCHES.has(sanitized)) {
+    throw new Error(`Cannot create a branch named "${sanitized}" — that's a protected branch name.`);
+  }
+
   await git().checkoutLocalBranch(sanitized);
-  
+
   if (sanitized !== branchName) {
     return `Created and switched to branch: ${sanitized} (sanitized from "${branchName}")`;
   }

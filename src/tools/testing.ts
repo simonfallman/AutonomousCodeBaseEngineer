@@ -31,9 +31,9 @@ async function readAceConfig(repoPath: string): Promise<AceConfig> {
   try {
     const raw = await fs.readFile(path.join(repoPath, ".ace.json"), "utf-8");
     return JSON.parse(raw);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // ENOENT just means no config file — that's fine and expected
-    if (err?.code !== "ENOENT") {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
       console.error("[ace config] Failed to parse .ace.json — using defaults:", err);
     }
     return {};
@@ -50,8 +50,8 @@ async function detectTestCommand(repoPath: string): Promise<string> {
     if (pkg.scripts?.test && !pkg.scripts.test.includes("no test specified")) {
       return "npm test";
     }
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") {
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
       console.error("[detectTestCommand] Failed to read or parse package.json:", err);
     }
   }
@@ -108,13 +108,14 @@ async function runCommand(command: string, cwd: string): Promise<string> {
       maxBuffer: 10 * 1024 * 1024, // 10MB max buffer
     });
     return truncateOutput([stdout, stderr].filter(Boolean).join("\n"));
-  } catch (err: any) {
-    if (err.killed) {
-      return `Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s and was killed.\n\n${truncateOutput([err.stdout, err.stderr].filter(Boolean).join("\n"))}`;
+  } catch (err: unknown) {
+    const e = err as { killed?: boolean; stdout?: string; stderr?: string; message?: string };
+    if (e.killed) {
+      return `Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s and was killed.\n\n${truncateOutput([e.stdout, e.stderr].filter(Boolean).join("\n"))}`;
     }
     // Non-zero exit (e.g. failing tests) — return output so agent can read it
-    const out = [err.stdout, err.stderr].filter(Boolean).join("\n");
-    return truncateOutput(out || err.message);
+    const out = [e.stdout, e.stderr].filter(Boolean).join("\n");
+    return truncateOutput(out || e.message || String(err));
   }
 }
 

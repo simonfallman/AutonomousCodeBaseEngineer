@@ -155,9 +155,9 @@ export async function analyzeDependencies(): Promise<string> {
     try {
       const content = await fs.readFile(path.join(repoPath, filename), "utf-8");
       results.push(`## ${label}\n${parse(content)}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Only log unexpected errors; ENOENT just means this dep file isn't present
-      if (err?.code !== "ENOENT") {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
         console.error(`[analyze_dependencies] Unexpected error reading "${filename}":`, err);
       }
     }

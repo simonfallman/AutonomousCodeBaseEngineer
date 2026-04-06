@@ -1,5 +1,6 @@
 import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { bedrockClient, LLM_MODEL_ID, REQUEST_TIMEOUT_MS } from "../llm/client.js";
+import { complete } from "../llm/bedrock.js";
 import { TOOL_REGISTRY, TOOL_SCHEMAS } from "./tools.js";
 
 const TOOL_OUTPUT_MAX_CHARS = 30_000; // truncate tool outputs to prevent context bloat
@@ -236,31 +237,8 @@ export async function runAgentLoop(
 }
 
 export async function planTask(task: string): Promise<string> {
-  const body = JSON.stringify({
-    anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 4096,
-    system:
-      "You are a senior software engineer. Given a task description and a list of available tools, produce a concise numbered step-by-step plan to complete the task. Do not execute anything — only plan.",
-    messages: [
-      {
-        role: "user",
-        content: `Available tools: ${TOOL_SCHEMAS.map((t) => t.name).join(", ")}\n\nTask: ${task}`,
-      },
-    ],
-  });
-
-  const command = new InvokeModelCommand({
-    modelId: LLM_MODEL_ID,
-    contentType: "application/json",
-    accept: "application/json",
-    body,
-  });
-
-  const response = await withTimeout(
-    bedrockClient.send(command),
-    REQUEST_TIMEOUT_MS,
-    "Bedrock planTask call"
-  );
-  const result = JSON.parse(Buffer.from(response.body).toString("utf-8"));
-  return result.content[0].text as string;
+  const system =
+    "You are a senior software engineer. Given a task description and a list of available tools, produce a concise numbered step-by-step plan to complete the task. Do not execute anything — only plan.";
+  const userMessage = `Available tools: ${TOOL_SCHEMAS.map((t) => t.name).join(", ")}\n\nTask: ${task}`;
+  return complete(system, userMessage);
 }
