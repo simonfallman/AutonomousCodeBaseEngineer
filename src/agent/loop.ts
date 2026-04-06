@@ -2,6 +2,9 @@ import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { bedrockClient, LLM_MODEL_ID, REQUEST_TIMEOUT_MS } from "../llm/client.js";
 import { complete } from "../llm/bedrock.js";
 import { TOOL_REGISTRY, TOOL_SCHEMAS, type ToolFn } from "./tools.js";
+// type-only imports are erased at runtime — no circular dep at load time
+import type { GroundedPlan } from "./planner.js";
+import type { ExecutionResult } from "./executor.js";
 
 const TOOL_OUTPUT_MAX_CHARS = 30_000; // truncate tool outputs to prevent context bloat
 const TOOL_TIMEOUT_MS = 300_000; // 5 min max per tool call
@@ -251,4 +254,96 @@ export async function planTask(task: string): Promise<string> {
     "You are a senior software engineer. Given a task description and a list of available tools, produce a concise numbered step-by-step plan to complete the task. Do not execute anything — only plan.";
   const userMessage = `Available tools: ${(TOOL_SCHEMAS as ToolSchema[]).map((t) => t.name).join(", ")}\n\nTask: ${task}`;
   return complete(system, userMessage);
+}
+
+export interface CoordinatedResult {
+  plan: GroundedPlan;
+  executionResults: ExecutionResult[];
+  answer: string;
+  usage: AgentUsage;
+}
+
+export async function runCoordinatedLoop(
+  task: string,
+  maxIterations = 15,
+  onProgress?: (message: string) => void,
+  signal?: AbortSignal
+): Promise<CoordinatedResult> {
+  // Dynamic imports break the circular dependency at load time
+  const { runPlannerLoop } = await import("./planner.js");
+  const { runExecutorLoop } = await import("./executor.js");
+
+  const planIterations = Math.max(5, Math.floor(maxIterations * 0.4));
+  const executeIterationsPerItem = Math.min(8, Math.max(4, maxIterations - planIterations));
+
+  // Phase 1: plan
+  onProgress?.("[plan] Exploring repository and identifying issues...");
+  const plan = await runPlannerLoop(task, planIterations, (msg) =>
+    onProgress?.(`[plan] ${msg}`)
+  );
+  onProgress?.(`[plan] Found ${plan.items.length} item(s): ${plan.summary}`);
+
+  if (plan.items.length === 0) {
+    return {
+      plan,
+      executionResults: [],
+      answer: `Planning complete. ${plan.summary} No fixes required.`,
+      usage: { inputTokens: 0, outputTokens: 0 },
+    };
+  }
+
+  // Phase 2: execute each item
+  const executionResults: ExecutionResult[] = [];
+  const usage: AgentUsage = { inputTokens: 0, outputTokens: 0 };
+
+  for (let i = 0; i < plan.items.length; i++) {
+    if (signal?.aborted) break;
+
+    const item = plan.items[i];
+    onProgress?.(`[execute ${i + 1}/${plan.items.length}] Fixing: ${item.issue} in ${item.file}`);
+
+    const execResult = await runExecutorLoop(item, executeIterationsPerItem, (msg) =>
+      onProgress?.(`[execute ${i + 1}/${plan.items.length}] ${msg}`)
+    );
+    executionResults.push(execResult);
+
+    const status = execResult.success ? "✓" : "✗";
+    onProgress?.(`[execute ${i + 1}/${plan.items.length}] ${status} ${execResult.output.slice(0, 100)}`);
+  }
+
+  const succeeded = executionResults.filter((r) => r.success);
+  const failed = executionResults.filter((r) => !r.success);
+  const allChanged = [...new Set(executionResults.flatMap((r) => r.filesChanged))];
+
+  const lines = [
+    `## Plan: ${plan.summary}`,
+    ``,
+    `**Fixes applied:** ${succeeded.length}/${plan.items.length}`,
+  ];
+
+  if (succeeded.length > 0) {
+    lines.push(``, `### Applied`);
+    for (const r of succeeded) {
+      lines.push(`- **${r.item.file}**: ${r.output.replace(/^DONE:\s*/i, "")}`);
+    }
+  }
+
+  if (failed.length > 0) {
+    lines.push(``, `### Failed`);
+    for (const r of failed) {
+      lines.push(`- **${r.item.file}**: ${r.output.replace(/^FAILED:\s*/i, "")}`);
+    }
+  }
+
+  if (allChanged.length > 0) {
+    lines.push(``, `### Files changed`);
+    for (const f of allChanged) lines.push(`- \`${f}\``);
+  }
+
+  return {
+    plan,
+    executionResults,
+    answer: lines.join("\n"),
+    usage,
+  };
 }

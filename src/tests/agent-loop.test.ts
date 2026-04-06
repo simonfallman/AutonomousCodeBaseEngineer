@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runAgentLoop } from "../agent/loop.js";
+import { runAgentLoop, runCoordinatedLoop } from "../agent/loop.js";
 import type { ToolFn } from "../agent/tools.js";
 
 // These tests make real Bedrock API calls.
@@ -97,6 +97,17 @@ describeIfCreds("runAgentLoop (real API)", () => {
     expect(result.steps.some((s) => s.type === "tool_call" && s.tool === "list_files")).toBe(true);
     expect(called).toContain("list_files");
   }, 30_000);
+
+  it("runCoordinatedLoop returns a CoordinatedResult with plan and executionResults", async () => {
+    const result = await runCoordinatedLoop(
+      "Check if src/agent/planner.ts exists and has any obvious syntax issues. Read the file.",
+      10
+    );
+
+    expect(typeof result.answer).toBe("string");
+    expect(Array.isArray(result.plan.items)).toBe(true);
+    expect(Array.isArray(result.executionResults)).toBe(true);
+  }, 180_000);
 
   it("reports progress callbacks", async () => {
     const progress: string[] = [];
