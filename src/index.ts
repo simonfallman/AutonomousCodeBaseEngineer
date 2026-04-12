@@ -1,6 +1,8 @@
 import "dotenv/config";
+import http from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { listFiles, readFile, writeFile, deleteFile, searchFiles, grepRepo, applyPatch } from "./tools/navigation.js";
 import { runTests, runLinter, runBuild } from "./tools/testing.js";
@@ -399,9 +401,41 @@ function createServer(): McpServer {
 
 // --- Start ---
 
-const transport = new StdioServerTransport();
-const server = createServer();
-transport.onclose = () => stopWatcher();
-await server.connect(transport);
-startWatcher();
-indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
+if (process.env.MCP_TRANSPORT === "sse") {
+  const port = parseInt(process.env.PORT ?? "3001");
+  const transports: Record<string, SSEServerTransport> = {};
+
+  const postPath = process.env.MCP_POST_PATH ?? "/message";
+
+  const httpServer = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost`);
+    if (req.method === "GET" && url.pathname === "/sse") {
+      const transport = new SSEServerTransport(postPath, res);
+      transports[transport.sessionId] = transport;
+      res.on("close", () => delete transports[transport.sessionId]);
+      const server = createServer();
+      await server.connect(transport);
+      startWatcher();
+      indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
+    } else if (req.method === "POST" && url.pathname === "/message") {
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const transport = transports[sessionId];
+      if (transport) {
+        await transport.handlePostMessage(req, res);
+      } else {
+        res.writeHead(404).end("Session not found");
+      }
+    } else {
+      res.writeHead(404).end("Not found");
+    }
+  });
+
+  httpServer.listen(port, () => console.error(`[sse] Listening on port ${port}`));
+} else {
+  const transport = new StdioServerTransport();
+  const server = createServer();
+  transport.onclose = () => stopWatcher();
+  await server.connect(transport);
+  startWatcher();
+  indexRepository().then((msg) => console.error(`[index] ${msg}`)).catch((err) => console.error(`[index] Failed:`, err));
+}
