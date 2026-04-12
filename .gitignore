@@ -9,3 +9,7 @@ dist/
 *.pfx
 .DS_Store
 .worktrees/
+CLAUDE.md
+PLAN.md
+docs/superpowers/
+.claude/
